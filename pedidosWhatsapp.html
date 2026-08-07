@@ -1,0 +1,1948 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pedidos WhatsApp</title>
+  <link rel="icon" href="faviconnegro.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Firebase Auth Check -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="config.js"></script>
+  <script>
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    firebase.auth().onAuthStateChanged(function(user) {
+      if (!user) {
+        window.location.href = 'login.html?redirect=' + encodeURIComponent(window.location.pathname);
+      }
+    });
+    const db = firebase.database();
+  </script>
+  <!-- Fin Firebase Auth Check -->
+  <!-- QZ Tray: puente local para impresión ESC-POS (fuente nativa de la 3nStar RPT008) -->
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script>
+    let pedidosCache = {};
+    let terminoBusqueda = ''; // Término aplicado (solo se actualiza al presionar Buscar/Enter)
+    // === ALIAS: Historial desde localStorage + Google Sheets ===
+    let aliasHistorial = [];
+    let aliasDesdeSheets = [];
+
+    function cargarHistorialAliasDesdeLocalStorage() {
+      try {
+        const aliasGuardados = localStorage.getItem('historialAlias');
+        aliasHistorial = aliasGuardados ? JSON.parse(aliasGuardados) : [];
+      } catch (error) {
+        aliasHistorial = [];
+      }
+    }
+
+    async function cargarAliasDesdeSheets() {
+      try {
+        if (typeof GOOGLE_SHEETS_CONFIG === 'undefined') return;
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${GOOGLE_SHEETS_CONFIG.SPREADSHEET_ID}/values/Alias!A2:A?key=${GOOGLE_SHEETS_CONFIG.API_KEY}`;
+        const resp = await fetch(url);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.values) {
+          aliasDesdeSheets = data.values.map(r => r[0]).filter(Boolean).map(a => a.trim().toUpperCase());
+        }
+      } catch (error) {
+        console.error('Error cargando alias desde Google Sheets:', error);
+      }
+    }
+
+    function guardarAliasEnLocalStorage(nuevoAlias) {
+      try {
+        if (!nuevoAlias || nuevoAlias.trim() === '') return;
+        const aliasLimpio = nuevoAlias.trim().toUpperCase();
+        let historial = [];
+        const aliasGuardados = localStorage.getItem('historialAlias');
+        if (aliasGuardados) historial = JSON.parse(aliasGuardados);
+        historial = historial.filter(a => a !== aliasLimpio);
+        historial.unshift(aliasLimpio);
+        historial = historial.slice(0, 15);
+        localStorage.setItem('historialAlias', JSON.stringify(historial));
+        aliasHistorial = historial;
+      } catch (error) {
+        console.error('Error guardando alias en localStorage:', error);
+      }
+    }
+
+    function obtenerListaAlias() {
+      const vistos = new Set();
+      const lista = [];
+      aliasHistorial.forEach(a => { if (!vistos.has(a)) { vistos.add(a); lista.push(a); } });
+      aliasDesdeSheets.forEach(a => { if (!vistos.has(a)) { vistos.add(a); lista.push(a); } });
+      return lista;
+    }
+
+    // Cargar alias al inicio
+    cargarHistorialAliasDesdeLocalStorage();
+    cargarAliasDesdeSheets();
+
+    // === MODAL WHATSAPP ===
+    let whatsappPedidoId = null;
+
+    function abrirModalWhatsapp(id) {
+      whatsappPedidoId = id;
+      const pedido = pedidosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const aliasActual = (pedido.pagos && pedido.pagos.alias) ? pedido.pagos.alias.trim().toUpperCase() : '';
+      document.getElementById('waAliasInput').value = aliasActual;
+
+      // El teléfono ya no se pide en el modal: se toma directamente de cliente.telefono
+      // (editable desde la columna "Teléfono"). Acá solo se muestra como destino.
+      const telefonoActual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono : '';
+      const display = document.getElementById('waTelefonoDisplay');
+      display.textContent = telefonoActual || 'Sin teléfono cargado';
+      display.style.color = telefonoActual ? '#222' : '#e8523f';
+
+      // Poblar datalist
+      const datalist = document.getElementById('waAliasDatalist');
+      datalist.innerHTML = '';
+      obtenerListaAlias().forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a;
+        datalist.appendChild(opt);
+      });
+
+      document.getElementById('waModal').style.display = 'flex';
+      document.getElementById('waAliasInput').focus();
+    }
+
+    function cerrarModalWhatsapp() {
+      document.getElementById('waModal').style.display = 'none';
+      whatsappPedidoId = null;
+    }
+
+    // Guarda solo el alias en Firebase + caché local. Devuelve true si OK.
+    // El teléfono se gestiona aparte (columna "Teléfono"), no desde este modal.
+    async function persistirAliasModal(alias) {
+      if (!whatsappPedidoId) return false;
+      const pedido = pedidosCache[whatsappPedidoId];
+      if (!pedido) { alert('Pedido no encontrado'); return false; }
+
+      const aliasActual = (pedido.pagos && pedido.pagos.alias) ? pedido.pagos.alias.trim().toUpperCase() : '';
+      if (alias === aliasActual) return true;
+
+      try {
+        await db.ref('pedidos/' + whatsappPedidoId + '/pagos/alias').set(alias);
+        if (!pedido.pagos) pedido.pagos = {};
+        pedido.pagos.alias = alias;
+        if (alias) guardarAliasEnLocalStorage(alias);
+        return true;
+      } catch (e) {
+        console.error('Error guardando alias del modal:', e);
+        alert('Error al guardar en Firebase');
+        return false;
+      }
+    }
+
+    async function guardarDatosModal() {
+      if (!whatsappPedidoId) return;
+      const aliasInput = document.getElementById('waAliasInput').value.trim().toUpperCase();
+
+      if (!aliasInput) {
+        alert('Debe ingresar un alias');
+        return;
+      }
+
+      const ok = await persistirAliasModal(aliasInput);
+      if (ok) {
+        const btn = document.getElementById('waBtnGuardar');
+        const txtOriginal = btn.innerHTML;
+        btn.innerHTML = '✓ Guardado';
+        btn.disabled = true;
+        setTimeout(() => {
+          btn.innerHTML = txtOriginal;
+          btn.disabled = false;
+          cerrarModalWhatsapp();
+        }, 700);
+      }
+    }
+
+    async function enviarWhatsapp() {
+      if (!whatsappPedidoId) return;
+      const pedido = pedidosCache[whatsappPedidoId];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const aliasInput = document.getElementById('waAliasInput').value.trim().toUpperCase();
+      if (!aliasInput) { alert('Debe ingresar un alias'); return; }
+
+      // El teléfono se toma directamente del pedido (columna "Teléfono"), no del modal.
+      const telefonoActual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono.toString() : '';
+      const telefonoDigits = telefonoActual.replace(/\D/g, '');
+      if (!telefonoDigits) {
+        alert('Este pedido no tiene teléfono cargado.\nCargalo en la columna "Teléfono" antes de enviar.');
+        return;
+      }
+
+      const ok = await persistirAliasModal(aliasInput);
+      if (!ok) return;
+
+      // Formatear teléfono: asegurar prefijo 54 para Argentina
+      let tel = telefonoDigits;
+      if (!tel.startsWith('54')) tel = '54' + tel;
+
+      const url = `https://api.whatsapp.com/send/?phone=${tel}&text=${encodeURIComponent(aliasInput)}`;
+      window.open(url, '_blank');
+      cerrarModalWhatsapp();
+    }
+
+    // === MODAL MARCAR COMO ENTREGADO ===
+    let entregadoPedidoId = null;
+
+    function abrirModalEntregado(id) {
+      entregadoPedidoId = id;
+      const pedido = pedidosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const nombre = (pedido.cliente && pedido.cliente.nombre) ? pedido.cliente.nombre : '';
+      document.getElementById('entregadoCliente').textContent = nombre || 'Sin nombre';
+      const input = document.getElementById('entregadoCodigo');
+      input.value = '';
+      const err = document.getElementById('entregadoError');
+      err.textContent = '';
+      err.style.display = 'none';
+      const btn = document.getElementById('entregadoBtnConfirmar');
+
+      // Aviso de pago pendiente: para cualquier rol cuando el pedido no está pagado.
+      const noPagado = ((pedido.pagos && pedido.pagos.pago) || '').toString().trim().toLowerCase() !== 'y';
+      const requiereAviso = noPagado;
+      const banner = document.getElementById('entregadoAdvertenciaPago');
+      const checkWrap = document.getElementById('entregadoConfirmaPagoWrap');
+      const check = document.getElementById('entregadoConfirmaPago');
+      check.checked = false;
+      banner.style.display = requiereAviso ? 'flex' : 'none';
+      checkWrap.style.display = requiereAviso ? 'flex' : 'none';
+      if (requiereAviso) {
+        btn.innerHTML = entregadoBtnTextoConfirmar;
+        setBtnEntregarHabilitado(false);   // arranca gris/deshabilitado
+        check.onchange = () => setBtnEntregarHabilitado(check.checked);
+      } else {
+        btn.innerHTML = entregadoBtnTextoOriginal;
+        setBtnEntregarHabilitado(true);
+        check.onchange = null;
+      }
+
+      document.getElementById('entregadoModal').style.display = 'flex';
+      setTimeout(() => input.focus(), 50);
+    }
+
+    // Alterna el aspecto del botón "Entregar igualmente": gris si está deshabilitado,
+    // verde si está habilitado (tras tildar la confirmación de pago).
+    function setBtnEntregarHabilitado(habilitado) {
+      const btn = document.getElementById('entregadoBtnConfirmar');
+      btn.disabled = !habilitado;
+      btn.style.background = habilitado ? '#1faa59' : '#b0b3ba';
+      btn.style.cursor = habilitado ? 'pointer' : 'not-allowed';
+    }
+
+    function cerrarModalEntregado() {
+      document.getElementById('entregadoModal').style.display = 'none';
+      entregadoPedidoId = null;
+      // Estado limpio para el próximo pedido.
+      const check = document.getElementById('entregadoConfirmaPago');
+      if (check) { check.checked = false; check.onchange = null; }
+      document.getElementById('entregadoAdvertenciaPago').style.display = 'none';
+      document.getElementById('entregadoConfirmaPagoWrap').style.display = 'none';
+    }
+
+    function mostrarErrorEntregado(msg) {
+      const err = document.getElementById('entregadoError');
+      err.textContent = msg;
+      err.style.display = 'block';
+    }
+
+    let entregadoBtnTextoOriginal = 'Confirmar entrega';
+    let entregadoBtnTextoConfirmar = 'Entregar igualmente';
+
+    async function confirmarEntregado() {
+      if (!entregadoPedidoId) return;
+      const code = document.getElementById('entregadoCodigo').value.trim().toUpperCase();
+      const esperado = entregadoPedidoId.slice(-5).toUpperCase();
+
+      if (!code) { mostrarErrorEntregado('Ingresá el código de 5 caracteres.'); return; }
+      // El código se expresa siempre en mayúsculas; se compara sin distinguir may/min.
+      if (code !== esperado) {
+        mostrarErrorEntregado('Código incorrecto. Verificá los últimos 5 caracteres del pedido.');
+        return;
+      }
+
+      // Guard de seguridad: ningún rol puede entregar un pedido no pagado
+      // sin tildar la confirmación explícita (cubre también el atajo Enter).
+      const pedido = pedidosCache[entregadoPedidoId] || entregadosCache[entregadoPedidoId];
+      const noPagado = (((pedido && pedido.pagos && pedido.pagos.pago) || '')).toString().trim().toLowerCase() !== 'y';
+      if (noPagado && !document.getElementById('entregadoConfirmaPago').checked) {
+        mostrarErrorEntregado('Pedido sin pago confirmado. Tildá la casilla para entregar igualmente.');
+        return;
+      }
+
+      const btn = document.getElementById('entregadoBtnConfirmar');
+      btn.disabled = true;
+      btn.innerHTML = 'Registrando...';
+      try {
+        await db.ref('pedidos/' + entregadoPedidoId + '/retiro').set('y');
+        // El listener en tiempo real re-renderiza y el pedido desaparece (esPendiente()).
+        if (pedidosCache[entregadoPedidoId]) pedidosCache[entregadoPedidoId].retiro = 'y';
+        cerrarModalEntregado();
+      } catch (e) {
+        console.error('Error al marcar como entregado:', e);
+        mostrarErrorEntregado('Error al registrar en Firebase. Reintentá.');
+        btn.disabled = false;
+        btn.innerHTML = entregadoBtnTextoOriginal;
+      }
+    }
+
+    // === ENVIAR CLAVE DE RETIRO POR WHATSAPP ===
+    // Toma el teléfono directamente de cliente.telefono (columna "Teléfono") y abre
+    // WhatsApp con el mensaje del código, igual que el botón de datos bancarios.
+    function enviarCodigoRetiro(id) {
+      const pedido = pedidosCache[id] || entregadosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const code = id.slice(-5).toUpperCase();
+      const telefonoActual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono.toString() : '';
+      const telefonoDigits = telefonoActual.replace(/\D/g, '');
+      if (!telefonoDigits) {
+        alert('Este pedido no tiene teléfono cargado.\nCargalo en la columna "Teléfono" antes de enviar.');
+        return;
+      }
+
+      let tel = telefonoDigits;
+      if (!tel.startsWith('54')) tel = '54' + tel;
+
+      const nombre = (pedido.cliente && pedido.cliente.nombre) ? pedido.cliente.nombre.toString().trim() : '';
+      const saludo = nombre ? `${nombre}, tu` : 'Tu';
+      const texto = `${saludo} pedido fue ingresado. Por favor, para poder retirarlo indica en caja el código ${code}`;
+      const url = `https://api.whatsapp.com/send/?phone=${tel}&text=${encodeURIComponent(texto)}`;
+      window.open(url, '_blank');
+    }
+
+    // Rol del usuario actual: 'vendedor' (acceso total) | 'entregas' (sin banco/clave/pago).
+    // Se define en el modal de acceso (#loginModal) antes de arrancar la app.
+    let rolUsuario = null;
+
+    // Selección de rol en el modal de acceso.
+    function seleccionarRol(rol) {
+      if (rol === 'entregas') { ingresarComoRol('entregas'); return; }
+      // Vendedor: pide clave.
+      document.getElementById('loginOpciones').style.display = 'none';
+      document.getElementById('loginClave').style.display = 'block';
+      const inp = document.getElementById('loginClaveInput');
+      inp.value = '';
+      document.getElementById('loginError').style.display = 'none';
+      setTimeout(() => inp.focus(), 50);
+    }
+
+    function volverOpcionesLogin() {
+      document.getElementById('loginClave').style.display = 'none';
+      document.getElementById('loginOpciones').style.display = 'flex';
+    }
+
+    function validarClaveVendedor() {
+      const clave = document.getElementById('loginClaveInput').value;
+      if (clave === '2381') {
+        ingresarComoRol('vendedor');
+      } else {
+        document.getElementById('loginError').style.display = 'block';
+        document.getElementById('loginClaveInput').select();
+      }
+    }
+
+    // Iconos del chip de usuario según rol.
+    const ICONO_VENDEDOR = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4zm-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664h10z"/></svg>';
+    const ICONO_ENTREGAS = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7zm1.294 7.456A1.999 1.999 0 0 1 4.732 11h5.536a2.01 2.01 0 0 1 .732-.732V3.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .294.456zM12 10a2 2 0 0 1 1.732 1h.768a.5.5 0 0 0 .5-.5V8.35a.5.5 0 0 0-.11-.312l-1.48-1.85A.5.5 0 0 0 13.02 6H12v4zm-9 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm9 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>';
+
+    function ingresarComoRol(rol) {
+      rolUsuario = rol;
+      document.getElementById('loginModal').style.display = 'none';
+      const chip = document.getElementById('rolBadge');
+      const txt = document.getElementById('rolBadgeText');
+      const ico = document.getElementById('rolBadgeIcon');
+      if (txt) txt.textContent = rol === 'vendedor' ? 'Vendedor' : 'Entregas';
+      if (ico) ico.innerHTML = rol === 'vendedor' ? ICONO_VENDEDOR : ICONO_ENTREGAS;
+      if (chip) chip.classList.toggle('rol-entregas', rol === 'entregas');
+      iniciarApp();
+      // Si la app ya estaba corriendo (cambio de usuario), refresca el estado de los botones.
+      if (appIniciada) renderPedidos();
+    }
+
+    // Reabre el modal de acceso para cambiar de tipo de usuario.
+    function cambiarUsuario() {
+      volverOpcionesLogin();
+      document.getElementById('loginModal').style.display = 'flex';
+    }
+
+    // Arranca la carga de datos. Solo se llama tras elegir rol en el modal de acceso.
+    // Idempotente: el listener de Firebase se engancha una sola vez.
+    let appIniciada = false;
+    function iniciarApp() {
+      if (appIniciada) return;
+      appIniciada = true;
+      // Carga en tiempo real de los pedidos WhatsApp pendientes.
+      // Se acota en el servidor por `vendedor === 'WhatsApp'` (en lugar de una
+      // ventana de tiempo), así Firebase solo transfiere los pedidos de ese canal.
+      // Requiere índice en las reglas de Firebase: "pedidos": { ".indexOn": "vendedor" }.
+      // El resto del filtro (esDespachado / esPendiente) se hace en cliente.
+      db.ref('pedidos')
+        .orderByChild('vendedor')
+        .equalTo('WhatsApp')
+        .on('value', snap => {
+          pedidosCache = {};
+          snap.forEach(child => {
+            const v = child.val();
+            if (esDespachado(v)) pedidosCache[child.key] = v;
+          });
+          renderPedidos();
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      // Búsqueda manual: se aplica solo al presionar Enter o el botón "Buscar".
+      const inputBusqueda = document.getElementById('filtroBusqueda');
+      // El campo arranca readonly para que el navegador no lo interprete como usuario/login
+      // ni lo autocomplete al cargar. Se habilita recién cuando el usuario interactúa.
+      const habilitarBusqueda = () => inputBusqueda.removeAttribute('readonly');
+      inputBusqueda.addEventListener('focus', habilitarBusqueda);
+      inputBusqueda.addEventListener('pointerdown', habilitarBusqueda);
+      inputBusqueda.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); buscar(); }
+      });
+      document.getElementById('btnBuscar').addEventListener('click', buscar);
+      // El modal de acceso (#loginModal) ya está visible; la app arranca tras elegir rol.
+    });
+
+    // Muestra solo pedidos pendientes: oculta retirados ('si') y entregados ('y').
+    function esPendiente(p) {
+      const r = (p.retiro || '').toString().trim().toLowerCase();
+      return r !== 'si' && r !== 'y';
+    }
+
+    // Pedido ya entregado por esta vista (retiro = 'y').
+    function esEntregado(p) {
+      return (p.retiro || '').toString().trim().toLowerCase() === 'y';
+    }
+
+    // Esta vista solo opera con pedidos cuyo status es 'DESPACHADO/ENTREGADO'.
+    function esDespachado(p) {
+      return (p.status || '').toString().trim().toUpperCase() === 'DESPACHADO/ENTREGADO';
+    }
+
+    // Vista actual: 'pendientes' (default) | 'entregados'
+    let vistaActual = 'pendientes';
+    // Caché de entregados: se llena SOLO al presionar el botón (descarga on-demand).
+    let entregadosCache = {};
+    // Paginación (solo vista de entregados): 50 registros por página.
+    const ENTREGADOS_POR_PAGINA = 50;
+    let paginaEntregados = 0;
+
+    function toggleVista() {
+      vistaActual = vistaActual === 'pendientes' ? 'entregados' : 'pendientes';
+      const btn = document.getElementById('btnVistaEntregados');
+      const txt = document.getElementById('btnVistaTexto');
+      if (vistaActual === 'entregados') {
+        btn.classList.add('activo');
+        txt.textContent = 'Ver pendientes';
+        cargarEntregados();   // descarga bajo demanda, acotada a 1 día
+      } else {
+        btn.classList.remove('activo');
+        txt.textContent = 'Entregados';
+        renderPedidos();
+      }
+    }
+
+    // Descarga puntual (.once) de los pedidos entregados, acotada en el servidor
+    // por `vendedor === 'WhatsApp'` (mismo criterio que la carga inicial, en lugar
+    // de una ventana de tiempo). No deja un listener abierto: solo se consulta al
+    // presionar el botón. El resultado se pagina en cliente de a 50 registros.
+    // Requiere índice en las reglas de Firebase: "pedidos": { ".indexOn": "vendedor" }.
+    async function cargarEntregados() {
+      const tbody = document.getElementById('pedidosBody');
+      const contador = document.getElementById('contadorPedidos');
+      tbody.innerHTML = '<tr><td colspan="7" class="estado-vacio">Cargando entregados...</td></tr>';
+      contador.textContent = 'Cargando...';
+      paginaEntregados = 0;
+
+      try {
+        const snap = await db.ref('pedidos')
+          .orderByChild('vendedor')
+          .equalTo('WhatsApp')
+          .once('value');
+        entregadosCache = {};
+        snap.forEach(child => {
+          const v = child.val();
+          if (esDespachado(v) && esEntregado(v)) {
+            entregadosCache[child.key] = v;
+          }
+        });
+      } catch (e) {
+        console.error('Error cargando entregados:', e);
+        tbody.innerHTML = '<tr><td colspan="7" class="estado-vacio">Error al cargar los pedidos entregados.</td></tr>';
+        contador.textContent = '0 entregados';
+        return;
+      }
+      renderPedidos();
+    }
+
+    // Quita la marca de entregado (elimina el campo retiro) y vuelve al estado anterior.
+    async function revertirEntregado(id) {
+      if (!confirm('¿Quitar la marca de entregado de este pedido? Volverá a su estado anterior (pendiente).')) return;
+      try {
+        await db.ref('pedidos/' + id + '/retiro').remove();
+        delete entregadosCache[id];
+        // El listener de pendientes (pedidosCache) se actualiza solo al cambiar retiro.
+        renderPedidos();
+      } catch (e) {
+        console.error('Error al revertir entrega:', e);
+        alert('Error al quitar la marca de entregado. Reintentá.');
+      }
+    }
+
+    function renderPedidos() {
+      const tbody = document.getElementById('pedidosBody');
+      const contador = document.getElementById('contadorPedidos');
+      const esVistaEntregados = vistaActual === 'entregados';
+      const pedidos = esVistaEntregados ? entregadosCache : pedidosCache;
+      const q = terminoBusqueda;
+
+      // En entregados, entregadosCache ya viene filtrado (retiro='y' + 1 día).
+      // En pendientes, se filtra esPendiente sobre el listener en tiempo real.
+      let keys = esVistaEntregados
+        ? Object.keys(pedidos).reverse()
+        : Object.keys(pedidos).filter(id => esPendiente(pedidos[id])).reverse();
+
+      if (q) {
+        keys = keys.filter(id => {
+          const p = pedidos[id];
+          return id.toLowerCase().includes(q)
+              || (p.cliente?.nombre || '').toLowerCase().includes(q)
+              || (p.nota || '').toLowerCase().includes(q);
+        });
+      }
+
+      contador.textContent = esVistaEntregados
+        ? `${keys.length} entregado${keys.length !== 1 ? 's' : ''}`
+        : `${keys.length} pedido${keys.length !== 1 ? 's' : ''} pendiente${keys.length !== 1 ? 's' : ''}`;
+
+      const paginacionEl = document.getElementById('paginacion');
+
+      if (keys.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="estado-vacio">${esVistaEntregados ? 'No hay pedidos entregados que coincidan con la búsqueda.' : 'No hay pedidos de WhatsApp pendientes que coincidan con la búsqueda.'}</td></tr>`;
+        if (paginacionEl) paginacionEl.style.display = 'none';
+        return;
+      }
+
+      // Paginación de a 50: solo aplica a la vista de entregados.
+      let keysVisibles = keys;
+      if (esVistaEntregados) {
+        const totalPaginas = Math.ceil(keys.length / ENTREGADOS_POR_PAGINA);
+        if (paginaEntregados > totalPaginas - 1) paginaEntregados = totalPaginas - 1;
+        if (paginaEntregados < 0) paginaEntregados = 0;
+        const inicio = paginaEntregados * ENTREGADOS_POR_PAGINA;
+        keysVisibles = keys.slice(inicio, inicio + ENTREGADOS_POR_PAGINA);
+        renderPaginacion(keys.length, totalPaginas);
+      } else if (paginacionEl) {
+        paginacionEl.style.display = 'none';
+      }
+
+      tbody.innerHTML = '';
+      keysVisibles.forEach(id => {
+        const p = pedidos[id];
+        const fecha = p.fecha || '';
+        const cliente = p.cliente || {};
+        const isCancelado = (p.status || '').toUpperCase() === 'CANCELADO';
+        const isEntregado = esEntregado(p);
+        const rowClass = isCancelado ? 'row-cancelado' : (isEntregado ? 'row-entregado' : '');
+        const pagos = p.pagos || {};
+        const totalFinal = pagos.totalFinal !== undefined ? `$${Number(pagos.totalFinal).toLocaleString('es-AR', {maximumFractionDigits:0})}` : '';
+        const medioPagoNorm = (pagos.medioPago || '').toString().trim().toLowerCase();
+        const waHabilitado = medioPagoNorm === 'transferencia' || medioPagoNorm === 'parcial';
+        const impreso = (p.print || '').toString().trim().toLowerCase() === 'y';
+        const aliasCompleto = (pagos.alias || '').toString().trim() !== '';
+        const pagado = (pagos.pago || '').toString().trim().toLowerCase() === 'y';
+        const claveHabilitada = pagado || medioPagoNorm === 'efectivo';
+        const codigoRetiro = id.slice(-5).toUpperCase();
+        // El rol Entregas no opera banco/clave/pago.
+        const esEntregas = rolUsuario === 'entregas';
+        // Solo el rol Vendedor puede editar nombre y teléfono del cliente.
+        const esVendedor = rolUsuario === 'vendedor';
+        const waActivo = waHabilitado && !esEntregas;
+        const claveActiva = claveHabilitada && !esEntregas;
+
+        const nombreSeguro = (cliente.nombre || '').replace(/"/g, '&quot;');
+        const telefono = (cliente.telefono || '').toString();
+
+        tbody.innerHTML += `
+          <tr${rowClass ? ` class="${rowClass}"` : ''}>
+            <td class="col-fecha">${fecha}</td>
+            <td class="col-nombre" title="ID: ${id}">
+              ${esVendedor
+                ? `<span class="nombre-edit" onclick="editarNombre('${id}')" title="Editar nombre del cliente">
+                ${cliente.nombre ? cliente.nombre : '<span class="telefono-vacio">Agregar</span>'}
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
+              </span>`
+                : `<span class="nombre-link" onclick="verPedido('${id}')">${cliente.nombre || ''}</span>`}
+            </td>
+            <td class="col-telefono">
+              ${esVendedor
+                ? `<span class="telefono-edit" onclick="editarTelefono('${id}')" title="Editar teléfono del cliente">
+                ${telefono ? telefono : '<span class="telefono-vacio">Agregar</span>'}
+                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
+              </span>`
+                : `${telefono ? telefono : '<span class="telefono-vacio">—</span>'}`}
+            </td>
+            <td class="col-nota">${esVendedor
+                ? `<span class="nota-edit" onclick="editarNota('${id}')" title="Editar nota del pedido">${p.nota ? p.nota : '<span class="telefono-vacio">Agregar</span>'}<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></span>`
+                : `${p.nota || ''}`}</td>
+            <td class="col-total">${totalFinal}</td>
+            <td class="col-pago">${pagos.medioPago || ''}</td>
+            <td class="col-acciones">
+              <div class="acciones">
+                <button class="btn-ico btn-ver" onclick="verPedido('${id}')" title="Ver pedido">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg>
+                </button>
+                <button class="btn-ico btn-wa" onclick="abrirModalWhatsapp('${id}')" title="${esEntregas ? 'No disponible para el rol Entregas' : (waHabilitado ? (aliasCompleto ? 'Alias cargado — enviar datos bancarios por WhatsApp' : 'Enviar datos bancarios (alias) por WhatsApp') : 'Solo disponible para pagos por transferencia o parcial')}"${waActivo ? '' : ' disabled'}>
+                  ${aliasCompleto
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/></svg>'
+                    : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M8.277.084a.5.5 0 0 0-.554 0l-7.5 5A.5.5 0 0 0 .5 6h1.875v7H1.5a.5.5 0 0 0 0 1h13a.5.5 0 1 0 0-1h-.875V6H15.5a.5.5 0 0 0 .277-.916l-7.5-5zM12.375 6v7h-1.25V6h1.25zm-2.5 0v7h-1.25V6h1.25zm-2.5 0v7h-1.25V6h1.25zm-2.5 0v7h-1.25V6h1.25zM8 4a1 1 0 1 1 0-2 1 1 0 0 1 0 2zM.5 15a.5.5 0 0 0 0 1h15a.5.5 0 0 0 0-1H.5z"/></svg>'}
+                </button>
+                <button class="btn-ico btn-pago" onclick="togglePago('${id}')" title="${esEntregas ? 'No disponible para el rol Entregas' : (pagado ? 'Pagado (clic para revertir)' : 'Marcar como pagado')}"${esEntregas ? ' disabled' : ''}>
+                  ${pagado
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/></svg>'
+                    : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M1 3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1H1zm7 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/><path d="M0 5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V5zm3 0a2 2 0 0 1-2 2v4a2 2 0 0 1 2 2h10a2 2 0 0 1 2-2V7a2 2 0 0 1-2-2H3z"/></svg>'}
+                </button>
+                <button class="btn-ico btn-copiar" onclick="enviarCodigoRetiro('${id}')" title="${esEntregas ? 'No disponible para el rol Entregas' : (claveHabilitada ? `Enviar clave de retiro por WhatsApp (${codigoRetiro})` : 'Solo disponible si el pedido está pagado o el medio de pago es efectivo')}"${claveActiva ? '' : ' disabled'}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.5 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2zM2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/></svg>
+                </button>
+                <button class="btn-ico btn-print" onclick="imprimirPedido('${id}')" title="${impreso ? 'Reimprimir (ya impreso)' : 'Imprimir (pendiente)'}">
+                  ${impreso
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/></svg>'
+                    : '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/><path d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 10a1 1 0 0 1-1-1V9h8v3a1 1 0 0 1-1 1H5z"/></svg>'}
+                </button>
+                ${isEntregado
+                  ? `<button class="btn-ico btn-revertir" onclick="revertirEntregado('${id}')" title="Quitar marca de entregado">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg>
+                </button>`
+                  : `<button class="btn-ico btn-entregar" onclick="abrirModalEntregado('${id}')" title="Marcar como entregado">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l1.094 1.093 3.473-3.425a.267.267 0 0 1 .02-.022z"/><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/></svg>
+                </button>`}
+                <button class="btn-ico btn-cancelar" onclick="cancelarPedido('${id}')" title="Cancelar pedido"${isCancelado ? ' disabled' : ''}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8z"/></svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    // Dibuja los controles de paginación de la vista de entregados.
+    function renderPaginacion(total, totalPaginas) {
+      const el = document.getElementById('paginacion');
+      if (!el) return;
+      if (totalPaginas <= 1) { el.style.display = 'none'; return; }
+      const desde = paginaEntregados * ENTREGADOS_POR_PAGINA + 1;
+      const hasta = Math.min((paginaEntregados + 1) * ENTREGADOS_POR_PAGINA, total);
+      el.style.display = 'flex';
+      el.innerHTML = `
+        <button class="btn-pag" onclick="cambiarPagina(-1)"${paginaEntregados === 0 ? ' disabled' : ''}>‹ Anteriores</button>
+        <span class="pag-info">${desde}–${hasta} de ${total} · pág. ${paginaEntregados + 1}/${totalPaginas}</span>
+        <button class="btn-pag" onclick="cambiarPagina(1)"${paginaEntregados >= totalPaginas - 1 ? ' disabled' : ''}>Siguientes ›</button>
+      `;
+    }
+
+    function cambiarPagina(delta) {
+      paginaEntregados += delta;
+      renderPedidos();
+      const card = document.querySelector('.tabla-card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function buscar() {
+      terminoBusqueda = document.getElementById('filtroBusqueda').value.trim().toLowerCase();
+      paginaEntregados = 0;
+      renderPedidos();
+    }
+
+    function limpiarFiltros() {
+      document.getElementById('filtroBusqueda').value = '';
+      terminoBusqueda = '';
+      paginaEntregados = 0;
+      renderPedidos();
+      document.getElementById('filtroBusqueda').focus();
+    }
+
+    function verPedido(id) {
+      window.open(`ingresoPedido.html?id=${id}`, '_blank');
+    }
+
+    // Edición manual del teléfono del cliente -> pedidos/{id}/cliente/telefono.
+    // Pide el nuevo valor y luego un confirm explícito para evitar cambios por error.
+    async function editarNota(id) {
+      if (rolUsuario !== 'vendedor') return;   // solo Vendedor edita
+      const pedido = pedidosCache[id] || entregadosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const actual = (pedido.nota || '').toString();
+      const ingresado = prompt('Nota del pedido:', actual);
+      if (ingresado === null) return;                 // canceló
+      const nuevo = ingresado.trim();
+      if (nuevo === actual.trim()) return;            // sin cambios reales
+
+      const mensaje = nuevo
+        ? `¿Confirmás guardar la nota para este pedido?\n\n"${nuevo}"`
+        : '¿Confirmás borrar la nota de este pedido?';
+      if (!confirm(mensaje)) return;
+
+      try {
+        await db.ref('pedidos/' + id + '/nota').set(nuevo);
+        pedido.nota = nuevo;
+        renderPedidos();
+      } catch (e) {
+        console.error('Error al guardar la nota:', e);
+        alert('Error al guardar la nota en Firebase. Reintentá.');
+      }
+    }
+
+    async function editarNombre(id) {
+      if (rolUsuario !== 'vendedor') return;   // solo Vendedor edita
+      const pedido = pedidosCache[id] || entregadosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const actual = (pedido.cliente && pedido.cliente.nombre) ? pedido.cliente.nombre.toString() : '';
+      const ingresado = prompt('Nombre del cliente:', actual);
+      if (ingresado === null) return;                 // canceló
+      const nuevo = ingresado.trim();
+      if (nuevo === actual.trim()) return;            // sin cambios reales
+
+      const mensaje = nuevo
+        ? `¿Confirmás guardar el nombre "${nuevo}" para este pedido?\n\nSe modificará el dato del cliente en la base.`
+        : '¿Confirmás borrar el nombre de este pedido?';
+      if (!confirm(mensaje)) return;
+
+      try {
+        await db.ref('pedidos/' + id + '/cliente/nombre').set(nuevo);
+        if (!pedido.cliente) pedido.cliente = {};
+        pedido.cliente.nombre = nuevo;
+        renderPedidos();
+      } catch (e) {
+        console.error('Error al guardar el nombre:', e);
+        alert('Error al guardar el nombre en Firebase. Reintentá.');
+      }
+    }
+
+    async function editarTelefono(id) {
+      if (rolUsuario !== 'vendedor') return;   // solo Vendedor edita
+      const pedido = pedidosCache[id] || entregadosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const actual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono.toString() : '';
+      const ingresado = prompt('Teléfono del cliente:', actual);
+      if (ingresado === null) return;                 // canceló
+      const nuevo = ingresado.trim();
+      if (nuevo === actual.trim()) return;            // sin cambios reales
+
+      const mensaje = nuevo
+        ? `¿Confirmás guardar el teléfono "${nuevo}" para este pedido?\n\nSe modificará el dato del cliente en la base.`
+        : '¿Confirmás borrar el teléfono de este pedido?';
+      if (!confirm(mensaje)) return;
+
+      try {
+        await db.ref('pedidos/' + id + '/cliente/telefono').set(nuevo);
+        if (!pedido.cliente) pedido.cliente = {};
+        pedido.cliente.telefono = nuevo;
+        renderPedidos();
+      } catch (e) {
+        console.error('Error al guardar el teléfono:', e);
+        alert('Error al guardar el teléfono en Firebase. Reintentá.');
+      }
+    }
+
+    // Marca/desmarca el pedido como pagado -> pedidos/{id}/pagos/pago = 'y'.
+    // Reversible: al volver a tocarlo elimina la marca (set null quita el campo).
+    async function togglePago(id) {
+      const pedido = pedidosCache[id] || entregadosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const pagadoActual = ((pedido.pagos && pedido.pagos.pago) || '').toString().trim().toLowerCase() === 'y';
+      const nuevoValor = pagadoActual ? null : 'y';
+
+      try {
+        await db.ref('pedidos/' + id + '/pagos/pago').set(nuevoValor);
+        if (!pedido.pagos) pedido.pagos = {};
+        if (nuevoValor) pedido.pagos.pago = 'y';
+        else delete pedido.pagos.pago;
+        renderPedidos();
+      } catch (e) {
+        console.error('Error al actualizar el estado de pago:', e);
+        alert('Error al guardar el estado de pago en Firebase. Reintentá.');
+      }
+    }
+
+    // ====================================================================
+    // IMPRESIÓN ESC-POS (fuente nativa FONTA de la 3nStar RPT008 vía QZ Tray)
+    // ====================================================================
+    // El navegador no puede mandar bytes ESC-POS por window.print() (siempre
+    // rasteriza). QZ Tray es una app local que recibe la orden desde la web y
+    // envía texto crudo a la impresora, que lo dibuja con su generador interno
+    // FONTA: nítido y definido, no un mapa de bits.
+
+    // Nombre exacto de la impresora como figura en Windows.
+    // null = usar la impresora por defecto del sistema.
+    const POS_PRINTER_NAME = 'POS-80C';
+
+    // Ancho de línea de FONTA a 72 mm según el selftest: 48 caracteres.
+    const POS_COLS = 48;
+
+    // Normaliza a ASCII/PC437 (Page0, code page por defecto de la impresora):
+    // sin esto, acentos y ñ saldrían como basura en modo texto.
+    function posPlain(val) {
+      if (val === null || val === undefined) return '';
+      return String(val)
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[¿¡]/g, '')
+        .replace(/[^\x00-\x7F]/g, '');
+    }
+
+    // Helpers de formato a 48 columnas
+    function posSep() { return '-'.repeat(POS_COLS) + '\n'; }
+
+    function posFila(izq, der) {
+      izq = posPlain(izq); der = posPlain(der);
+      const espacio = POS_COLS - izq.length - der.length;
+      if (espacio < 1) {
+        izq = izq.slice(0, Math.max(0, POS_COLS - der.length - 1));
+        return izq + ' ' + der + '\n';
+      }
+      return izq + ' '.repeat(espacio) + der + '\n';
+    }
+
+    function posWrap(texto) {
+      texto = posPlain(texto);
+      let out = '';
+      while (texto.length > POS_COLS) {
+        out += texto.slice(0, POS_COLS) + '\n';
+        texto = texto.slice(POS_COLS);
+      }
+      return out + texto + '\n';
+    }
+
+    // Comandos ESC-POS como bytes hex / texto plano (formato que entiende QZ)
+    const escCmd = (hex) => ({ type: 'raw', format: 'hex', data: hex });
+    const escTxt = (s) => ({ type: 'raw', format: 'plain', data: s });
+
+    // Construye el documento ESC-POS completo del recibo.
+    // conLogo=false omite la imagen (el logo es lo único raster; si la
+    // impresora/QZ no lo puede procesar, igual sale todo el texto nativo).
+    function construirESCPOS(pedido, conLogo) {
+      const cliente = pedido.cliente || {};
+      const nombre = cliente.nombre || '';
+      const telefono = cliente.telefono || '';
+      const pagos = pedido.pagos || {};
+      const medioPago = pagos.medioPago || '';
+
+      const parseNum = (val) => {
+        if (val === null || val === undefined || val === '') return NaN;
+        if (typeof val === 'number') return val;
+        const clean = String(val).replace(/[^\d,.-]/g, '');
+        return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+      };
+      const soloEntero = (val) => {
+        if (val === null || val === undefined || val === '') return '';
+        const n = parseNum(val);
+        if (isNaN(n)) return String(val);
+        return Math.round(n).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+      };
+      const ultimos5BC = (cb) => {
+        if (!cb) return '';
+        return String(cb).split(',').map(s => s.replace(/\D/g, '').slice(-5)).filter(Boolean).join(' ');
+      };
+
+      const data = [];
+      data.push(escCmd('1B40'));   // ESC @  -> reset
+      data.push(escCmd('1B7400')); // ESC t 0 -> code page PC437 (Page0)
+      data.push(escCmd('1B5200')); // ESC R 0 -> juego de caracteres USA
+
+      // Encabezado centrado
+      data.push(escCmd('1B6101')); // centrar
+      if (conLogo) {
+        // Logo: única parte raster. Si QZ/impresora no lo procesa, se
+        // reintenta sin logo (ver imprimirReciboESCPOS) y el texto igual sale.
+        try {
+          const logoUrl = new URL('logo.png', window.location.href).href;
+          data.push({ type: 'raw', format: 'image', flavor: 'file', data: logoUrl,
+                      options: { language: 'ESCPOS', dotDensity: 'double' } });
+          data.push(escTxt('\n'));
+        } catch (e) { /* sin logo, el ticket igual sale */ }
+      } else {
+        // Sin logo: nombre del local como texto nativo (doble alto/ancho)
+        data.push(escCmd('1D2111')); // GS ! 0x11 -> doble alto y ancho
+        data.push(escTxt('HOMEPOINT\n'));
+        data.push(escCmd('1D2100')); // GS ! 0x00 -> tamaño normal
+      }
+      data.push(escTxt('\n'));
+      data.push(escTxt('Velez Sarsfield 4127, Munro\n'));
+      data.push(escTxt('Tel. 11 2189-1006\n'));
+      data.push(escTxt('\n')); // línea en blanco antes del título
+      data.push(escCmd('1B4501')); // negrita on
+      data.push(escTxt('PRESUPUESTO\n'));
+      data.push(escCmd('1B4500')); // negrita off
+      data.push(escTxt(posPlain(new Date(pedido.timestamp).toLocaleString('es-AR', { hour12: false })) + '\n'));
+
+      // Cuerpo alineado a la izquierda
+      data.push(escCmd('1B6100'));
+      data.push(escTxt(posSep()));
+      data.push(escTxt(posWrap('Nombre: ' + nombre)));
+      data.push(escTxt(posWrap('Telefono: ' + telefono)));
+      data.push(escTxt(posSep()));
+
+      if (pedido.items && Array.isArray(pedido.items)) {
+        pedido.items.forEach(it => {
+          const cant = it.cantidad || 0;
+          const vU = it.valorU || 0;
+          const vTotal = cant * vU;
+          const bc = ultimos5BC(it.codigoBarras);
+          data.push(escCmd('1B4501'));
+          data.push(escTxt(posWrap((it.nombre || '').toUpperCase())));
+          data.push(escCmd('1B4500'));
+          data.push(escTxt(posFila(cant + ' x ' + soloEntero(vU), soloEntero(vTotal))));
+          data.push(escTxt(posWrap('COD.' + (it.codigo || '') + (bc ? ' - ' + bc : ''))));
+        });
+      }
+
+      data.push(escTxt(posSep()));
+      data.push(escTxt(posFila('Subtotal', soloEntero(pagos.subtotal))));
+      data.push(escTxt(posFila('Medio de Pago', medioPago)));
+      if (parseNum(pagos.recargo)) data.push(escTxt(posFila('Recargo', soloEntero(pagos.recargo))));
+      if (parseNum(pagos.descuento)) data.push(escTxt(posFila('Descuento', soloEntero(pagos.descuento))));
+      if (parseNum(pagos.envio)) data.push(escTxt(posFila('Costo de Envio', soloEntero(pagos.envio))));
+      data.push(escCmd('1B4501'));
+      data.push(escTxt(posFila('TOTAL', '$ ' + soloEntero(pagos.totalFinal))));
+      data.push(escCmd('1B4500'));
+
+      data.push(escTxt(posSep()));
+      data.push(escCmd('1B6101')); // centrar leyenda
+      data.push(escCmd('1B4501'));
+      data.push(escTxt(posWrap('- DOCUMENTO NO VALIDO COMO FACTURA -')));
+      data.push(escCmd('1B4500'));
+
+      data.push(escTxt('\n\n\n'));
+      data.push(escCmd('1D564203')); // GS V 66 3 -> avanza y corta (parcial)
+      return data;
+    }
+
+    // QZ Tray — certificado propio (importar C:\Users\alero\.claude\qz-cert.pem en Site Manager para eliminar el diálogo).
+    let qzConfigurado = false;
+    function configurarQZ() {
+      if (qzConfigurado || typeof qz === 'undefined') return;
+      const QZ_CERT = `-----BEGIN CERTIFICATE-----
+MIIDXTCCAkWgAwIBAgIUPMCoqhpYQ4z55zCYiyngpH47VAwwDQYJKoZIhvcNAQEL
+BQAwPjELMAkGA1UEBhMCQVIxEjAQBgNVBAoMCUhvbWVQb2ludDEbMBkGA1UEAwwS
+SG9tZVBvaW50IEFkbWluIFFaMB4XDTI2MDUxOTE2NTAxOFoXDTM2MDUxNjE2NTAx
+OFowPjELMAkGA1UEBhMCQVIxEjAQBgNVBAoMCUhvbWVQb2ludDEbMBkGA1UEAwwS
+SG9tZVBvaW50IEFkbWluIFFaMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKC
+AQEA0G3Pek2EDxsUuyRoqYttHqkmudOhJ56FrUqqdks01dB52+kfoElM995N4Xqm
+GkBTkPLV30lUkEF1W5xKdCe3DcTp0qcZpIDf2468SKlvyi4WI9ji8rIBB4b/jN6l
+ECKUooi4iEeihKQ2WY2o7d7vhD52ITvJ9rKXJ1TWe9yyaW2sz3b7DfGKqZv+VwWY
+bQfZwLtymkGOi0IIplHwWmRoQdrl3rXE8tOIeB7Br15vKbIoXGwkV6W4rVmg+ngA
+M0BYqmcg08hRXZqUZ1nmyNsRrXijTv6D8qLvefO7D3eqIKXs0okmacGWZzfGLGnD
+YlEXTAVnMNmolKaRSVNVbF230wIDAQABo1MwUTAdBgNVHQ4EFgQUJbmYNOzALjUF
+zMY93JIwa2M6bi8wHwYDVR0jBBgwFoAUJbmYNOzALjUFzMY93JIwa2M6bi8wDwYD
+VR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAYO72+pxaqZifKkimB0tw
+mvKuqEfOOiXBawh7xBlLaTvHDaVH6v6ABqj7S73vSRBiD00oFKf5FQ42I+O1bUoN
+QYdIsxA2Q8ka7HaxMTB5v4ZBvbyXWLrRIavwY5XI2JWzArvZ8oTKB/gHF5lo9yDI
+nfvKQ9SL9y+GfwHOGkmUaw2ViScT17KdMJzSWoE37Qasp50Du+boRdmOgL0fN4nL
+zRY73MMEek1ny+DkbJ2OR7vmF2FSHaPqJzZb+UCINC3Pbf5KxqUPn+K2CEfT53hW
+3ALNhGIFw9E7pN6IE5LEdNkZCwpZRDksRo3UeBVcowsdmKzZ7Uwbe1dzxygzaLxX
+tw==
+-----END CERTIFICATE-----`;
+      const QZ_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDQbc96TYQPGxS7
+JGipi20eqSa506EnnoWtSqp2SzTV0Hnb6R+gSUz33k3heqYaQFOQ8tXfSVSQQXVb
+nEp0J7cNxOnSpxmkgN/bjrxIqW/KLhYj2OLysgEHhv+M3qUQIpSiiLiIR6KEpDZZ
+jajt3u+EPnYhO8n2spcnVNZ73LJpbazPdvsN8Yqpm/5XBZhtB9nAu3KaQY6LQgim
+UfBaZGhB2uXetcTy04h4HsGvXm8psihcbCRXpbitWaD6eAAzQFiqZyDTyFFdmpRn
+WebI2xGteKNO/oPyou9587sPd6ogpezSiSZpwZZnN8YsacNiURdMBWcw2aiUppFJ
+U1VsXbfTAgMBAAECggEACsutQ+3w6aFi9QCBRUrZ940WWuipv7YXwW6NHrxte6el
+MC1GfJRfXrVOfl/Oa6yqR2c0ibCwJxqk2/5f4t1Nv3JUFBugmeMs9R/TA8Z26ldx
+wSCSPLTYlc25vc+oaAoKfdKsEC75rXod8IyEU/HIoSZlEvqYTuVYK+ragybevNQf
+69UNrSovGjHuwDj3+tyZh0V7/Tp9Ch3iDRxFEZeqXtH0C8g4SxR0pTafyAIasyhV
+q6Y2ETEJWMVNUIIyrqtvWIQsewV6ykwUns09Qi6mFbBtz8uCLPsSyV7FccpOuWEk
+evL37yDL6HwdzA/xDnBST+eZeaRqBkB9rZs4W0kjpQKBgQD7fBZdudKO1/63AND4
+0DeVW/g3XZ6JiqBNFTtY1Q3pZRKbJhS+fSrZdReI7/7SZg9Tpgp9L6ih0aGe/Xqm
+Utz2SHQEk9D5nr8aTmn6E/YK956XuW1h6OGAdvxYfnnJibMIzT6yVVDYlFY1olj/
+VzXsmT0NM1JO/T4MCCfAKicEfwKBgQDUK9LU5NE/SaLwXslUK+jccTSP6cGUn+D0
+2IVTsccrh1lnD1ZlMoUR+5RTXAV5cyBzDL3ogvhpHTTaS8LGrJsw6c9wUvlbAVis
+hZ9WhXcC/U62ww5wZXFb+ShrYqrOLIv1Ul62Ixdoi2wofUOzT13tyGVgfuAtdeJ5
+QY4US/FSrQKBgQCKNi5MoH26B7dzeD1hIX4K1hrawtcInGlxM8QEFEOrC+Nn5Uvt
+TPkpvhKLLesMUw8FV/HXz0OMe5upt4Gau1u49yTcBykIp1g76vCPgjzs1h4RINWe
+w9B7O+l/8TKZstX0dmiIth7SiOPAYlMrMhDu0WEeSiBoTQG2txyxnfkHnQKBgHP9
+kUD55rrmksE90GrHpoH9EXMro7yQuvaf+CONKQlO8T06UUz5lW4DT09TG1sN6Ut8
+R8X487zjTqWYjV73tc/DwrfxZIiv775BPp6aUDm+KW4YrKgdjR9u0v4B7sbP66Ot
+6EFCZeWtcu+fq4c3eG4qA+IA+qVfsPQBNp859S/xAoGBALKK0Wx/OHaWPrAaThP0
+swiTwxojtYcW2WoyuWXzJClYn1id6V+kpFuDiLDJjg6ngdeXvZ9BHRY8J/eWe1JE
+0YPZcP39H64LvTr+s65TtMrhCs5eNKd5hiGAB0T5Ctardy4f5liqQ8EqNa7YzcR/
+8xJFkCasp5SwyHnKysUl8ViY
+-----END PRIVATE KEY-----`;
+      qz.security.setCertificatePromise((resolve) => resolve(QZ_CERT));
+      qz.security.setSignatureAlgorithm('SHA512');
+      qz.security.setSignaturePromise(function(toSign) {
+        return function(resolve, reject) {
+          const pem = QZ_KEY.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
+          const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
+          crypto.subtle.importKey('pkcs8', der.buffer,
+            { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' }, false, ['sign'])
+            .then(function(key) {
+              return crypto.subtle.sign('RSASSA-PKCS1-v1_5', key,
+                new TextEncoder().encode(toSign));
+            })
+            .then(function(sig) {
+              const bytes = new Uint8Array(sig);
+              let str = '';
+              for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+              resolve(btoa(str));
+            })
+            .catch(reject);
+        };
+      });
+      qzConfigurado = true;
+    }
+
+    async function conectarQZ() {
+      if (typeof qz === 'undefined') throw new Error('La librería de QZ Tray no se cargó');
+      configurarQZ();
+      if (qz.websocket.isActive()) return;
+      await qz.websocket.connect();
+    }
+
+    async function seleccionarImpresoraPOS() {
+      if (POS_PRINTER_NAME) return POS_PRINTER_NAME;
+      let lista = await qz.printers.find();
+      if (!Array.isArray(lista)) lista = [lista];
+      const m = lista.find(n => /3n[\s-]?star|rpt[\s-]?008|pos[\s-]?80|thermal|ticket/i.test(n));
+      if (m) return m;
+      return await qz.printers.getDefault();
+    }
+
+    async function imprimirReciboESCPOS(pedido) {
+      await conectarQZ();
+      const printerName = await seleccionarImpresoraPOS();
+      if (!printerName) throw new Error('No se encontró ninguna impresora');
+      const config = qz.configs.create(printerName, { encoding: 'CP437' });
+      try {
+        // Intento 1: con logo (imagen raster)
+        await qz.print(config, construirESCPOS(pedido, true));
+      } catch (eLogo) {
+        // Intento 2: sin logo (solo texto nativo). Si esto también falla,
+        // se propaga el error y el llamador ofrece el respaldo HTML.
+        console.warn('Print con logo falló, reintentando sin logo:', eLogo);
+        await qz.print(config, construirESCPOS(pedido, false));
+      }
+    }
+
+    // Marca el pedido como impreso en Firebase (print = 'y'). Best-effort.
+    async function marcarImpreso(id) {
+      try {
+        await db.ref('pedidos/' + id + '/print').set('y');
+        if (pedidosCache[id]) pedidosCache[id].print = 'y';
+        // El listener en tiempo real re-renderiza; igual forzamos por si acaso.
+        renderPedidos();
+      } catch (e) {
+        console.error('No se pudo registrar print=y:', e);
+      }
+    }
+
+    async function imprimirPedido(id) {
+      // Usar caché local: el pedido ya fue descargado, no se hace otro fetch a Firebase
+      const pedido = pedidosCache[id];
+      if (!pedido) {
+        alert('Pedido no encontrado');
+        return;
+      }
+      try {
+        // Camino principal: modo texto ESC-POS con la fuente nativa FONTA
+        await imprimirReciboESCPOS(pedido);
+        await marcarImpreso(id);
+      } catch (e) {
+        // El fallback NO es silencioso: mostramos el motivo real para poder
+        // diagnosticar por qué no entró el modo ESC-POS.
+        console.error('Fallo impresión ESC-POS:', e);
+        let motivo = (e && e.message) ? e.message : String(e);
+        if (typeof qz === 'undefined') {
+          motivo = 'La librería de QZ Tray no se cargó (¿sin internet o CDN bloqueado?).';
+        } else if (!qz.websocket.isActive()) {
+          motivo = 'No se pudo conectar con QZ Tray. Verificá que QZ Tray esté instalado y CORRIENDO (ícono en la bandeja del sistema).\n\nDetalle técnico: ' + motivo;
+        }
+        const usarHTML = confirm(
+          'No se pudo imprimir en modo ESC-POS (fuente nativa).\n\n' +
+          motivo + '\n\n' +
+          '¿Querés imprimir con el método HTML de respaldo (menos nítido)?'
+        );
+        if (usarHTML) {
+          generarReciboYImprimir(pedido);
+          await marcarImpreso(id);
+        }
+      }
+    }
+
+    function generarReciboYImprimir(pedido) {
+      // Obtener datos del pedido
+      const cliente = pedido.cliente || {};
+      const nombre = cliente.nombre || '';
+      const telefono = cliente.telefono || '';
+      const pagos = pedido.pagos || {};
+      const medioPago = pagos.medioPago || '';
+      const subtotal = pagos.subtotal;
+      const recargo = pagos.recargo;
+      const descuento = pagos.descuento;
+      const envio = pagos.envio;
+      const totalFinal = pagos.totalFinal;
+
+      // Helper: parsea cualquier valor a número (soporta formato es-AR)
+      const parseNum = (val) => {
+        if (val === null || val === undefined || val === '') return NaN;
+        if (typeof val === 'number') return val;
+        const clean = String(val).replace(/[^\d,.-]/g, '');
+        // Formato es-AR: '.' separador de miles, ',' decimal
+        return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+      };
+
+      // Helper: convierte cualquier valor a entero formateado es-AR (sin decimales)
+      const soloEntero = (val) => {
+        if (val === null || val === undefined || val === '') return '';
+        const n = parseNum(val);
+        if (isNaN(n)) return String(val);
+        return Math.round(n).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+      };
+
+      // Helper: últimos 5 dígitos de cada código de barras asignado
+      const ultimos5BC = (cb) => {
+        if (!cb) return '';
+        return String(cb)
+          .split(',')
+          .map(s => s.replace(/\D/g, '').slice(-5))
+          .filter(Boolean)
+          .join(' ');
+      };
+
+      // Helper: normaliza texto para la impresora POS 3nStar RPT008.
+      const posText = (val) => {
+        if (val === null || val === undefined) return '';
+        return String(val)
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '')
+          .replace(/¿|¡/g, '')
+          .replace(/[^\x00-\x7F]/g, '');
+      };
+
+      // Items en formato ticket
+      let itemsHtml = '';
+      if (pedido.items && Array.isArray(pedido.items)) {
+        pedido.items.forEach(it => {
+          const cant = it.cantidad || 0;
+          const vU = it.valorU || 0;
+          const vTotal = cant * vU;
+          const bc = ultimos5BC(it.codigoBarras);
+          itemsHtml += `
+            <div class="item">
+              <div class="item-nombre">${(it.nombre || '').toUpperCase()}</div>
+              <div class="item-linea">
+                <span>${cant} x ${soloEntero(vU)}</span>
+                <span>${soloEntero(vTotal)}</span>
+              </div>
+              <div class="item-cod">COD.${it.codigo || ''}${bc ? ' - ' + bc : ''}</div>
+            </div>`;
+        });
+      }
+      // Recibo HTML (formato ticket, ancho máx 8cm)
+      const reciboHtml = `
+        <html>
+        <head>
+          <title>Orden de Pedido</title>
+          <style>
+            @page { size: 80mm auto; margin: 0; }
+            html, body { margin: 0; padding: 0; }
+            body { font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.35; color: #000; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .recibo-box { width: 72mm; max-width: 72mm; margin: 0 auto; padding: 6px 4px; background: #fff; box-sizing: border-box; }
+            .logo { display: block; margin: 0 auto 6px auto; max-width: 60mm; max-height: 22mm; object-fit: contain; }
+            .local { text-align: center; }
+            .titulo { text-align: center; font-weight: bold; margin: 1.4em 0 4px 0; }
+            .fecha { text-align: center; margin-bottom: 6px; }
+            .datos { }
+            .sep { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+            .item { margin-bottom: 6px; }
+            .item-nombre { font-weight: bold; word-break: break-word; }
+            .item-linea { display: flex; justify-content: space-between; }
+            .item-cod { color: #000; }
+            .tot { padding: 2px 2px; }
+            .tot-fila { display: flex; justify-content: space-between; padding: 1px 0; }
+            .tot-final { font-weight: bold; }
+            .legend { text-align: center; font-weight: bold; margin-top: 12px; }
+            @media print { button { display: none !important; } }
+          </style>
+        </head>
+        <body>
+          <div class='recibo-box'>
+            <img src="logo.png" alt="Logo" class="logo">
+            <div class="local">Vélez Sársfield 4127, Munro</div>
+            <div class="local">Tel. 11 2189-1006</div>
+            <div class="titulo">PRESUPUESTO</div>
+            <div class="fecha">${new Date(pedido.timestamp).toLocaleString('es-AR', { hour12: false })}</div>
+            <hr class="sep">
+            <div class="datos">
+              <div>Nombre: ${nombre}</div>
+              <div>Telefono: ${telefono}</div>
+            </div>
+            <hr class="sep">
+            ${itemsHtml}
+            <hr class="sep">
+            <div class="tot">
+              <div class="tot-fila"><span>Subtotal</span><span>${soloEntero(subtotal)}</span></div>
+              <div class="tot-fila"><span>Medio de Pago</span><span>${medioPago}</span></div>
+              ${parseNum(recargo) ? `<div class="tot-fila"><span>Recargo</span><span>${soloEntero(recargo)}</span></div>` : ''}
+              ${parseNum(descuento) ? `<div class="tot-fila"><span>Descuento</span><span>${soloEntero(descuento)}</span></div>` : ''}
+              ${parseNum(envio) ? `<div class="tot-fila"><span>Costo de Envío</span><span>${soloEntero(envio)}</span></div>` : ''}
+              <div class="tot-fila tot-final"><span>TOTAL</span><span>$ ${soloEntero(totalFinal)}</span></div>
+            </div>
+            <hr class="sep">
+            <div class="legend">- DOCUMENTO NO VALIDO COMO FACTURA -</div>
+          </div>
+          <script>window.onload = function(){ window.print(); }<\/script>
+        </body>
+        </html>
+      `;
+
+      // Abrir ventana e imprimir.
+      const w = window.open('', '_blank', 'width=600,height=800');
+      w.document.write(posText(reciboHtml));
+      w.document.close();
+    }
+
+    // === ACTUALIZACIÓN DE STOCK EN TIEMPO REAL ===
+    async function actualizarStock(codigo, nombre, cantidad, tipo) {
+      if (!codigo || !nombre || !cantidad) return;
+
+      const stockRef = db.ref('stock/' + codigo);
+
+      try {
+        await stockRef.transaction(function(currentData) {
+          if (currentData === null) {
+            currentData = {
+              nombre: nombre,
+              stockActual: 0
+            };
+          }
+
+          let stockActual = currentData.stockActual || 0;
+
+          if (tipo === 'ENTRADA') {
+            stockActual += cantidad;
+          } else if (tipo === 'SALIDA' || tipo === 'RETIRO') {
+            stockActual -= cantidad;
+          }
+
+          stockActual = Math.max(0, stockActual);
+
+          return {
+            ...currentData,
+            nombre: nombre,
+            stockActual: stockActual
+          };
+        });
+      } catch (error) {
+        console.error('Error actualizando stock:', error, { codigo, nombre, cantidad, tipo });
+      }
+    }
+
+    async function cancelarPedido(id) {
+      const clave = prompt('Ingrese la contraseña para cancelar el pedido:');
+      if (clave === null) return;
+      if (clave !== '2574') { alert('Contraseña incorrecta'); return; }
+      if (!confirm('¿Seguro que desea cancelar este pedido? Esta acción es IRREVERSIBLE y el pedido no podrá ser modificado ni reactivado.')) return;
+
+      try {
+        // Primero obtener los movimientos antes de eliminarlos
+        const movimientosSnap = await db.ref('movimientos').orderByChild('pedidoId').equalTo(id).once('value');
+        const movimientos = movimientosSnap.val();
+
+        // Restaurar stock solo si hay movimientos de SALIDA
+        if (movimientos) {
+          const movimientosArray = Object.values(movimientos);
+          const movimientosSalida = movimientosArray.filter(mov => mov.tipo === 'SALIDA');
+
+          if (movimientosSalida.length > 0) {
+            for (const mov of movimientosSalida) {
+              if (mov.codigo && mov.nombre && mov.cantidad) {
+                await actualizarStock(mov.codigo, mov.nombre, mov.cantidad, 'ENTRADA');
+              }
+            }
+          }
+
+          const updates = {};
+          Object.keys(movimientos).forEach(key => {
+            updates[key] = null;
+          });
+          await db.ref('movimientos').update(updates);
+        }
+
+        await db.ref('pedidos/' + id).update({
+          status: 'CANCELADO',
+          locked: true,
+          movimientosRegistrados: false
+        });
+
+        alert('Pedido cancelado. Ya no podrá ser modificado. Los movimientos asociados han sido eliminados y el stock ha sido restaurado.');
+      } catch (e) {
+        console.error('Error al cancelar pedido:', e);
+        alert('Error al cancelar o eliminar movimientos');
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --brand-dark: #39373f;
+      --brand: #5c5866;
+      --brand-light: #989899;
+      --bg: #eef0f3;
+      --card: #ffffff;
+      --border: #e3e5ea;
+      --text: #2c2b31;
+      --muted: #7a7a82;
+      --wa: #25D366;
+      --ver: #2a3d8f;
+      --print: #555a61;
+      --print-pendiente: #f5a623;
+      --entregar: #1faa59;
+      --copiar: #6b6776;
+      --cancelar: #e8523f;
+      --pago: #0f9d58;
+      --pago-pendiente: #9aa0a8;
+      /* Escala secuencial del flujo de acciones (ver -> entregado): violeta -> azul ->
+         cian -> teal -> lima -> verde. Conduce visualmente el proceso paso a paso y
+         cada color es claramente distinguible del siguiente. Rojo queda para cancelar. */
+      --paso-ver: #7048e8;
+      --paso-banco: #1c7ed6;
+      --paso-pago: #1098ad;
+      --paso-clave: #0ca678;
+      --paso-print: #66a80f;
+      --paso-entregado: #2f9e44;
+      --shadow: 0 4px 18px rgba(33, 31, 40, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Roboto, Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+    }
+    header {
+      background: linear-gradient(120deg, var(--brand-dark), var(--brand));
+      padding: 1.4rem 1.5rem;
+      box-shadow: 0 2px 14px rgba(57, 55, 63, 0.25);
+    }
+    .header-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .header-icon {
+      width: 44px; height: 44px;
+      background: rgba(255,255,255,0.14);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      color: #fff;
+      letter-spacing: 0.3px;
+      font-weight: 700;
+    }
+    header p {
+      margin: 2px 0 0 0;
+      color: rgba(255,255,255,0.78);
+      font-size: 0.86rem;
+    }
+    main {
+      max-width: 1180px;
+      margin: 26px auto;
+      padding: 0 18px;
+    }
+    .toolbar {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 16px 18px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .search-wrap {
+      position: relative;
+      flex: 1 1 320px;
+      min-width: 240px;
+    }
+    .search-wrap svg {
+      position: absolute;
+      left: 12px; top: 50%;
+      transform: translateY(-50%);
+      fill: var(--muted);
+      pointer-events: none;
+    }
+    #filtroBusqueda {
+      width: 100%;
+      padding: 11px 14px 11px 38px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    #filtroBusqueda:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(92, 88, 102, 0.12);
+    }
+    .btn-buscar {
+      padding: 11px 20px;
+      border: none;
+      border-radius: 10px;
+      background: var(--brand);
+      color: #fff;
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-buscar:hover { background: var(--brand-dark); }
+    .btn-limpiar {
+      padding: 11px 18px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--brand-dark);
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-limpiar:hover { background: #f3f2f4; }
+    .btn-toggle {
+      padding: 11px 16px;
+      border: 1.5px solid var(--entregar);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--entregar);
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s;
+    }
+    .btn-toggle:hover { background: #eafaf0; }
+    .btn-toggle.activo { background: var(--entregar); color: #fff; }
+    .contador {
+      margin-left: auto;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--muted);
+      background: #f3f4f7;
+      padding: 8px 14px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .tabla-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .tabla-scroll { overflow-x: auto; }
+    .paginacion {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 14px 12px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .btn-pag {
+      padding: 8px 16px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--brand-dark);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-pag:hover:not(:disabled) { background: #f3f2f4; border-color: var(--brand); }
+    .btn-pag:disabled { opacity: 0.45; cursor: default; }
+    .pag-info { font-size: 0.85rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
+    table {
+      width: 100%;
+      min-width: 880px;
+      border-collapse: collapse;
+    }
+    thead th {
+      background: var(--brand-dark);
+      color: #fff;
+      font-size: 0.8rem;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      font-weight: 600;
+      padding: 13px 14px;
+      text-align: left;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    tbody td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.92rem;
+      vertical-align: middle;
+    }
+    tbody tr { transition: background 0.12s; }
+    tbody tr:hover { background: #f6f7fa; }
+    .col-fecha { white-space: nowrap; color: var(--muted); }
+    .col-nombre { font-weight: 600; cursor: help; }
+    .nombre-link {
+      color: var(--ver);
+      cursor: pointer;
+      border-bottom: 1px dotted var(--ver);
+    }
+    .nombre-link:hover { color: #1c2a66; }
+    .col-nota {
+      max-width: 230px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+      text-align: left;
+    }
+    .col-total { white-space: nowrap; font-weight: 700; }
+    .col-pago { white-space: nowrap; color: var(--muted); }
+    .col-telefono { white-space: nowrap; }
+    .telefono-edit {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      color: var(--ver);
+      border-bottom: 1px dotted var(--ver);
+    }
+    .telefono-edit:hover { color: #1c2a66; }
+    .telefono-edit svg { opacity: 0.6; }
+    .telefono-vacio { color: var(--muted); font-style: italic; }
+    .nombre-edit {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      color: var(--ver);
+      border-bottom: 1px dotted var(--ver);
+    }
+    .nombre-edit:hover { color: #1c2a66; }
+    .nombre-edit svg { opacity: 0.6; flex-shrink: 0; }
+    .nota-edit {
+      cursor: pointer;
+      color: var(--ver);
+      border-bottom: 1px dotted var(--ver);
+    }
+    .nota-edit:hover { color: #1c2a66; }
+    .nota-edit svg { opacity: 0.6; vertical-align: middle; margin-left: 4px; }
+    .row-cancelado { background: #f0f0f0 !important; color: #9a9a9a; }
+    .row-cancelado .nombre-link { color: #9a9a9a; border-bottom-color: #9a9a9a; }
+    .row-entregado { background: #f1f2f4 !important; }
+    .row-entregado:hover { background: #e9eaed !important; }
+    .estado-vacio {
+      text-align: center !important;
+      color: var(--muted);
+      padding: 38px 14px !important;
+      font-size: 0.95rem;
+    }
+    .acciones {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: nowrap;
+    }
+    .btn-ico {
+      width: 34px; height: 34px;
+      border: none;
+      border-radius: 9px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: transform 0.08s, filter 0.12s, background 0.12s;
+      flex-shrink: 0;
+    }
+    .btn-ico:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+    .btn-ico:active:not(:disabled) { transform: translateY(0); }
+    .btn-ico:disabled { background: #cfd0d4 !important; cursor: not-allowed; opacity: 0.7; }
+    /* Escala secuencial del proceso (mismo orden que los botones en pantalla).
+       El color es constante por botón; en los de estado solo cambia el icono. */
+    .btn-ver { background: var(--paso-ver); }
+    .btn-wa { background: var(--paso-banco); }
+    .btn-pago { background: var(--paso-pago); }
+    .btn-copiar { background: var(--paso-clave); }
+    .btn-copiar.copiado { background: var(--paso-entregado); }
+    .btn-print { background: var(--paso-print); }
+    .btn-entregar { background: var(--paso-entregado); }
+    .btn-revertir { background: #d9822b; }
+    .btn-cancelar { background: var(--cancelar); }
+
+    /* Modales */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.55);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 24px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+    }
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #eee;
+    }
+    .modal-head h3 { margin: 0; font-size: 1.15rem; color: #222; font-weight: 700; }
+    .modal-close {
+      background: none; border: none; font-size: 1.5rem;
+      cursor: pointer; color: #888; padding: 0; line-height: 1;
+    }
+
+    /* ---- Nuevo pedido (header) ---- */
+    .btn-new-order {
+      display: inline-flex; align-items: center; gap: 7px;
+      height: 40px; box-sizing: border-box;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.22);
+      color: #fff; border-radius: 999px;
+      font-size: 0.84rem; font-weight: 600;
+      padding: 0 16px; cursor: pointer; text-decoration: none; white-space: nowrap;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .btn-new-order:hover { background: rgba(255,255,255,0.22); }
+    .btn-new-order:active { transform: scale(0.96); }
+
+    /* ---- Usuario activo + cambio de usuario (header) ---- */
+    .user-area { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
+    .user-chip {
+      display: inline-flex; align-items: center; gap: 9px;
+      height: 40px; box-sizing: border-box;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.22);
+      padding: 0 14px 0 6px;
+      border-radius: 999px; white-space: nowrap;
+    }
+    .user-chip-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; flex-shrink: 0;
+      background: linear-gradient(135deg, #7048e8, #9775fa);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      transition: background 0.2s;
+    }
+    .user-chip.rol-entregas .user-chip-avatar { background: linear-gradient(135deg, #0ca678, #20c997); }
+    .user-chip-info { display: flex; flex-direction: column; line-height: 1.15; }
+    .user-chip-label {
+      font-size: 0.6rem; font-weight: 600; letter-spacing: 0.07em;
+      text-transform: uppercase; color: rgba(255,255,255,0.65);
+    }
+    .user-chip-role { font-size: 0.86rem; font-weight: 700; color: #fff; }
+    .btn-switch-user {
+      display: inline-flex; align-items: center; gap: 7px;
+      height: 40px; box-sizing: border-box;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.22);
+      color: #fff; border-radius: 999px;
+      font-size: 0.82rem; font-weight: 600;
+      padding: 0 14px; cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn-switch-user:hover { background: rgba(255,255,255,0.22); }
+    .btn-switch-user:active { transform: scale(0.96); }
+    .btn-switch-user svg { transition: transform 0.4s ease; }
+    .btn-switch-user:hover svg { transform: rotate(180deg); }
+
+    /* ---- Tarjetas de selección de rol (modal de acceso) ---- */
+    .role-card {
+      display: flex; align-items: center; gap: 14px; width: 100%;
+      padding: 15px 16px; border-radius: 14px;
+      border: 2px solid #edeef2; background: #fff;
+      cursor: pointer; text-align: left;
+      transition: transform 0.12s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+    .role-card:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(20,20,40,0.12); }
+    .role-card-icon {
+      width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center; color: #fff;
+    }
+    .role-card-body { display: flex; flex-direction: column; gap: 2px; }
+    .role-card-title { font-size: 1.02rem; font-weight: 700; color: #1f2330; }
+    .role-card-desc { font-size: 0.8rem; color: #6b7280; }
+    .role-card-arrow { margin-left: auto; color: #c8ccd4; transition: transform 0.15s ease, color 0.15s ease; }
+    .role-card:hover .role-card-arrow { transform: translateX(4px); }
+    .role-vendedor .role-card-icon { background: linear-gradient(135deg, #7048e8, #9775fa); }
+    .role-vendedor:hover { border-color: #7048e8; }
+    .role-vendedor:hover .role-card-arrow { color: #7048e8; }
+    .role-entregas .role-card-icon { background: linear-gradient(135deg, #0ca678, #20c997); }
+    .role-entregas:hover { border-color: #0ca678; }
+    .role-entregas:hover .role-card-arrow { color: #0ca678; }
+
+    @media (max-width: 600px) {
+      .contador { margin-left: 0; }
+      .toolbar { gap: 10px; }
+      .user-chip-label { display: none; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <div class="header-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" fill="#fff" viewBox="0 0 16 16"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592z"/></svg>
+    </div>
+    <div>
+      <h1>Pedidos WhatsApp</h1>
+      <p>Pedidos del canal WhatsApp pendientes de retiro</p>
+    </div>
+    <div class="user-area">
+      <a class="btn-new-order" href="ingresoPedido.html" target="_blank" rel="noopener" title="Generar un nuevo pedido (abre en otra pestaña)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8z"/></svg>
+        Nuevo
+      </a>
+      <div class="user-chip" id="rolBadge">
+        <span class="user-chip-avatar" id="rolBadgeIcon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4zm-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664h10z"/></svg>
+        </span>
+        <span class="user-chip-info">
+          <span class="user-chip-label">Usuario</span>
+          <span class="user-chip-role" id="rolBadgeText">—</span>
+        </span>
+      </div>
+      <button class="btn-switch-user" onclick="cambiarUsuario()" title="Cambiar tipo de usuario">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/><path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/></svg>
+        <span class="btn-switch-user-text">Cambiar</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="toolbar">
+    <div class="search-wrap">
+      <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 16 16"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0"/></svg>
+      <!-- Campos señuelo: absorben el autocompletado de usuario/contraseña que algunos navegadores fuerzan -->
+      <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;opacity:0;height:0;width:0;pointer-events:none;">
+      <input type="password" name="password" autocomplete="current-password" tabindex="-1" aria-hidden="true" style="position:absolute;opacity:0;height:0;width:0;pointer-events:none;">
+      <input type="search" id="filtroBusqueda" name="filtroBusqueda_nofill" placeholder="Buscar por ID, nombre o nota..." readonly autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="search" enterkeyhint="search" data-form-type="other" data-lpignore="true" data-1p-ignore aria-autocomplete="none">
+    </div>
+    <button class="btn-buscar" id="btnBuscar">Buscar</button>
+    <button class="btn-limpiar" onclick="limpiarFiltros()">Limpiar</button>
+    <button class="btn-toggle" id="btnVistaEntregados" onclick="toggleVista()">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l1.094 1.093 3.473-3.425a.267.267 0 0 1 .02-.022z"/><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/></svg>
+      <span id="btnVistaTexto">Entregados</span>
+    </button>
+    <span class="contador" id="contadorPedidos">Cargando...</span>
+  </div>
+
+  <div class="tabla-card">
+    <div class="tabla-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Nombre</th>
+            <th>Teléfono</th>
+            <th>Nota</th>
+            <th>Total</th>
+            <th>Pago</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="pedidosBody">
+          <tr><td colspan="7" class="estado-vacio">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="paginacion" class="paginacion" style="display:none;"></div>
+  </div>
+</main>
+
+<!-- Modal de acceso (rol de usuario) -->
+<div id="loginModal" class="modal-overlay" style="display:flex;">
+  <div class="modal-card" style="max-width:380px;">
+    <div class="modal-head" style="border-bottom:none;margin-bottom:6px;">
+      <h3>Tipo de usuario</h3>
+    </div>
+    <p style="margin:0 0 18px 0;font-size:0.9rem;color:#666;line-height:1.5;">
+      Seleccioná con qué rol vas a operar en esta sesión.
+    </p>
+
+    <div id="loginOpciones" style="display:flex;flex-direction:column;gap:12px;">
+      <button class="role-card role-vendedor" onclick="seleccionarRol('vendedor')">
+        <span class="role-card-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" viewBox="0 0 16 16"><path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
+        </span>
+        <span class="role-card-body">
+          <span class="role-card-title">Vendedor</span>
+          <span class="role-card-desc">Acceso completo · requiere clave</span>
+        </span>
+        <svg class="role-card-arrow" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+      <button class="role-card role-entregas" onclick="seleccionarRol('entregas')">
+        <span class="role-card-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" viewBox="0 0 16 16"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7zm1.294 7.456A1.999 1.999 0 0 1 4.732 11h5.536a2.01 2.01 0 0 1 .732-.732V3.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .294.456zM12 10a2 2 0 0 1 1.732 1h.768a.5.5 0 0 0 .5-.5V8.35a.5.5 0 0 0-.11-.312l-1.48-1.85A.5.5 0 0 0 13.02 6H12v4zm-9 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm9 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
+        </span>
+        <span class="role-card-body">
+          <span class="role-card-title">Entregas</span>
+          <span class="role-card-desc">Acceso de retiro · sin clave</span>
+        </span>
+        <svg class="role-card-arrow" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg>
+      </button>
+    </div>
+
+    <div id="loginClave" style="display:none;margin-top:6px;">
+      <label for="loginClaveInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Clave de acceso (Vendedor)</label>
+      <input type="password" id="loginClaveInput" inputmode="numeric" autocomplete="off" placeholder="Ingresá la clave" onkeydown="if(event.key==='Enter') validarClaveVendedor()" style="width:100%;padding:12px 14px;border:2px solid #ccc;border-radius:8px;font-size:1.1rem;text-align:center;letter-spacing:0.3em;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#7048e8'" onblur="this.style.borderColor='#ccc'">
+      <div id="loginError" style="display:none;color:#e8523f;font-size:0.85rem;font-weight:600;margin-top:8px;">Clave incorrecta. Reintentá.</div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button onclick="volverOpcionesLogin()" style="flex:1;padding:11px;background:#fff;color:#555;border:2px solid #ddd;border-radius:10px;font-size:0.95rem;font-weight:600;cursor:pointer;">Volver</button>
+        <button onclick="validarClaveVendedor()" style="flex:2;padding:11px;background:linear-gradient(135deg,#7048e8,#9775fa);color:#fff;border:none;border-radius:10px;font-size:0.95rem;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(112,72,232,0.35);">Ingresar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal WhatsApp Alias -->
+<div id="waModal" class="modal-overlay">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Contacto WhatsApp</h3>
+      <button class="modal-close" onclick="cerrarModalWhatsapp()" title="Cerrar">&times;</button>
+    </div>
+
+    <div style="margin-bottom:16px;background:#f5f6f8;border:1px solid #e3e5ea;border-radius:8px;padding:10px 12px;">
+      <span style="font-weight:600;font-size:0.78rem;color:#888;display:block;margin-bottom:2px;">Se enviará al teléfono</span>
+      <span id="waTelefonoDisplay" style="font-size:1rem;color:#222;font-weight:600;">—</span>
+    </div>
+
+    <div style="margin-bottom:20px;">
+      <label for="waAliasInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Alias</label>
+      <input type="text" id="waAliasInput" list="waAliasDatalist" placeholder="Ingrese o seleccione un alias" style="width:100%;padding:10px 12px;border:2px solid #ccc;border-radius:6px;font-size:1rem;text-transform:uppercase;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#25D366'" onblur="this.style.borderColor='#ccc'">
+      <datalist id="waAliasDatalist"></datalist>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button onclick="enviarWhatsapp()" style="width:100%;padding:12px;background:#25D366;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.15s;" onmouseover="this.style.background='#1ebe5b'" onmouseout="this.style.background='#25D366'">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="white" viewBox="0 0 16 16"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg>
+        Enviar WhatsApp
+      </button>
+      <button id="waBtnGuardar" onclick="guardarDatosModal()" style="width:100%;padding:11px;background:#fff;color:#2a3d8f;border:2px solid #2a3d8f;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.15s;" onmouseover="this.style.background='#2a3d8f';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#2a3d8f'">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm0-1h9.5L16 4.5V14a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z"/><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h5A1.5 1.5 0 0 1 11 4.5v2A1.5 1.5 0 0 1 9.5 8h-5A1.5 1.5 0 0 1 3 6.5v-2zM4.5 4a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h5a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-5z"/></svg>
+        Guardar
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Marcar como Entregado -->
+<div id="entregadoModal" class="modal-overlay">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Confirmar entrega</h3>
+      <button class="modal-close" onclick="cerrarModalEntregado()" title="Cerrar">&times;</button>
+    </div>
+
+    <p style="margin:0 0 16px 0;font-size:0.92rem;color:#555;line-height:1.5;">
+      Pedido de <strong id="entregadoCliente" style="color:#222;"></strong>.<br>
+      Ingresá el <strong>código de 5 caracteres</strong> que el cliente debe indicar (últimos 5 del ID del pedido) para validar la entrega.
+    </p>
+
+    <div style="margin-bottom:6px;">
+      <label for="entregadoCodigo" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Código de retiro</label>
+      <input type="text" id="entregadoCodigo" maxlength="5" placeholder="Ej: A3F9K" autocomplete="off" style="width:100%;padding:12px 14px;border:2px solid #ccc;border-radius:8px;font-size:1.4rem;letter-spacing:0.35em;text-align:center;text-transform:uppercase;font-family:'Courier New',monospace;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#1faa59'" onblur="this.style.borderColor='#ccc'">
+    </div>
+    <div id="entregadoError" style="display:none;color:#e8523f;font-size:0.85rem;font-weight:600;margin-bottom:10px;"></div>
+
+    <div id="entregadoAdvertenciaPago" style="display:none;align-items:flex-start;gap:9px;background:#fdecea;border:1.5px solid #e8523f;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#e8523f" viewBox="0 0 16 16" style="flex-shrink:0;margin-top:1px;"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>
+      <span style="font-size:0.85rem;color:#b3261e;font-weight:600;line-height:1.4;">Este pedido <strong>NO figura como pagado</strong>. Verificá el cobro antes de entregar.</span>
+    </div>
+    <label id="entregadoConfirmaPagoWrap" style="display:none;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;font-size:0.88rem;color:#444;font-weight:600;">
+      <input type="checkbox" id="entregadoConfirmaPago" style="width:17px;height:17px;cursor:pointer;flex-shrink:0;accent-color:#e8523f;">
+      Confirmo que el pago fue verificado
+    </label>
+
+    <div style="display:flex;gap:10px;margin-top:14px;">
+      <button onclick="cerrarModalEntregado()" style="flex:1;padding:11px;background:#fff;color:#555;border:2px solid #ccc;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;">Cancelar</button>
+      <button id="entregadoBtnConfirmar" onclick="confirmarEntregado()" style="flex:2;padding:11px;background:#1faa59;color:#fff;border:none;border-radius:8px;font-size:0.95rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.15s;" onmouseover="if(!this.disabled)this.style.background='#198f4a'" onmouseout="if(!this.disabled)this.style.background='#1faa59'">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="white" viewBox="0 0 16 16"><path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l1.094 1.093 3.473-3.425a.267.267 0 0 1 .02-.022z"/></svg>
+        Confirmar entrega
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Atajos de teclado para los modales
+  document.addEventListener('keydown', function(e) {
+    const waVisible = document.getElementById('waModal').style.display === 'flex';
+    const entVisible = document.getElementById('entregadoModal').style.display === 'flex';
+
+    if (waVisible) {
+      if (e.key === 'Escape') cerrarModalWhatsapp();
+      if (e.key === 'Enter' && document.activeElement.id === 'waAliasInput') enviarWhatsapp();
+    }
+    if (entVisible) {
+      if (e.key === 'Escape') cerrarModalEntregado();
+      if (e.key === 'Enter' && document.activeElement.id === 'entregadoCodigo') confirmarEntregado();
+    }
+  });
+  // Cerrar modales al hacer clic fuera
+  document.getElementById('waModal').addEventListener('click', function(e) {
+    if (e.target === this) cerrarModalWhatsapp();
+  });
+  document.getElementById('entregadoModal').addEventListener('click', function(e) {
+    if (e.target === this) cerrarModalEntregado();
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pedidos del Día</title>
+  <link rel="icon" href="faviconnegro.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Firebase Auth Check -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="config.js"></script>
+  <script>
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    firebase.auth().onAuthStateChanged(function(user) {
+      if (!user) {
+        window.location.href = 'login.html?redirect=' + encodeURIComponent(window.location.pathname);
+      }
+    });
+    const db = firebase.database();
+  </script>
+  <!-- Fin Firebase Auth Check -->
+  <!-- QZ Tray: puente local para impresión ESC-POS (fuente nativa de la 3nStar RPT008) -->
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script>
+    let pedidosCache = {};
+    // === ALIAS: Registro/lectura desde el nodo "alias" de Firebase RTDB (+ cache en localStorage) ===
+    let aliasHistorial = [];      // cache offline en localStorage
+    let aliasDesdeFirebase = [];  // alias registrados en el nodo "alias" de RTDB
+
+    // Convertir un alias a una clave válida para Firebase RTDB.
+    // Las claves no admiten . # $ / [ ] ; el alias original se guarda como valor.
+    function aliasAClave(alias) {
+      return alias.replace(/[.#$/\[\]]/g, c => '~' + c.charCodeAt(0) + '~');
+    }
+
+    function cargarHistorialAliasDesdeLocalStorage() {
+      try {
+        const aliasGuardados = localStorage.getItem('historialAlias');
+        aliasHistorial = aliasGuardados ? JSON.parse(aliasGuardados) : [];
+      } catch (error) {
+        aliasHistorial = [];
+      }
+    }
+
+    // Suscribirse al nodo "alias" de Firebase RTDB
+    function cargarAliasDesdeFirebase() {
+      try {
+        db.ref('alias').on('value', snap => {
+          const val = snap.val() || {};
+          aliasDesdeFirebase = Object.values(val)
+            .map(v => (v || '').toString().trim().toUpperCase())
+            .filter(v => v !== '');
+        });
+      } catch (error) {
+        console.error('Error cargando alias desde Firebase:', error);
+      }
+    }
+
+    // Registrar un alias en el nodo "alias" de Firebase (una sola vez, sin duplicados).
+    // La clave saneada garantiza unicidad: si ya existe, set lo sobrescribe sin duplicar.
+    function registrarAliasEnFirebase(nuevoAlias) {
+      try {
+        if (!nuevoAlias || nuevoAlias.trim() === '') return;
+        const aliasLimpio = nuevoAlias.trim().toUpperCase();
+        db.ref('alias/' + aliasAClave(aliasLimpio)).set(aliasLimpio);
+      } catch (error) {
+        console.error('Error registrando alias en Firebase:', error);
+      }
+    }
+
+    function guardarAliasEnLocalStorage(nuevoAlias) {
+      try {
+        if (!nuevoAlias || nuevoAlias.trim() === '') return;
+        const aliasLimpio = nuevoAlias.trim().toUpperCase();
+        // Registrar en el nodo "alias" de Firebase (fuente compartida)
+        registrarAliasEnFirebase(aliasLimpio);
+        let historial = [];
+        const aliasGuardados = localStorage.getItem('historialAlias');
+        if (aliasGuardados) historial = JSON.parse(aliasGuardados);
+        historial = historial.filter(a => a !== aliasLimpio);
+        historial.unshift(aliasLimpio);
+        historial = historial.slice(0, 15);
+        localStorage.setItem('historialAlias', JSON.stringify(historial));
+        aliasHistorial = historial;
+      } catch (error) {
+        console.error('Error guardando alias en localStorage:', error);
+      }
+    }
+
+    // Lista combinada (Firebase + cache local) sin duplicados y ordenada alfabéticamente
+    function obtenerListaAlias() {
+      const vistos = new Set();
+      const lista = [];
+      [...aliasDesdeFirebase, ...aliasHistorial].forEach(alias => {
+        const a = (alias || '').trim().toUpperCase();
+        if (a !== '' && !vistos.has(a)) { vistos.add(a); lista.push(a); }
+      });
+      lista.sort((a, b) => a.localeCompare(b, 'es'));
+      return lista;
+    }
+
+    // Cargar alias al inicio
+    cargarHistorialAliasDesdeLocalStorage();
+    cargarAliasDesdeFirebase();
+
+    // === MODAL WHATSAPP ===
+    let whatsappPedidoId = null;
+
+    function abrirModalWhatsapp(id) {
+      whatsappPedidoId = id;
+      const pedido = pedidosCache[id];
+      if (!pedido) { alert('Pedido no encontrado'); return; }
+
+      const aliasActual = (pedido.pagos && pedido.pagos.alias) ? pedido.pagos.alias.trim().toUpperCase() : '';
+      document.getElementById('waAliasInput').value = aliasActual;
+
+      const telefonoActual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono : '';
+      const telInput = document.getElementById('waTelefonoInput');
+      telInput.value = telefonoActual;
+      telInput.placeholder = telefonoActual ? '' : 'Ej: 11 2189-1006';
+
+      // Poblar datalist
+      const datalist = document.getElementById('waAliasDatalist');
+      datalist.innerHTML = '';
+      obtenerListaAlias().forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a;
+        datalist.appendChild(opt);
+      });
+
+      document.getElementById('waModal').style.display = 'flex';
+      // Si no hay teléfono, enfocar primero ese campo; si ya hay, enfocar alias
+      if (!telefonoActual) telInput.focus();
+      else document.getElementById('waAliasInput').focus();
+    }
+
+    function cerrarModalWhatsapp() {
+      document.getElementById('waModal').style.display = 'none';
+      whatsappPedidoId = null;
+    }
+
+    // Guarda alias y teléfono en Firebase + caché local. Devuelve true si OK.
+    async function persistirDatosModal({ alias, telefono }) {
+      if (!whatsappPedidoId) return false;
+      const pedido = pedidosCache[whatsappPedidoId];
+      if (!pedido) { alert('Pedido no encontrado'); return false; }
+
+      const aliasActual = (pedido.pagos && pedido.pagos.alias) ? pedido.pagos.alias.trim().toUpperCase() : '';
+      const telefonoActual = (pedido.cliente && pedido.cliente.telefono) ? pedido.cliente.telefono : '';
+
+      const updates = {};
+      if (alias !== aliasActual) updates['pedidos/' + whatsappPedidoId + '/pagos/alias'] = alias;
+      if (telefono !== telefonoActual) updates['pedidos/' + whatsappPedidoId + '/cliente/telefono'] = telefono;
+
+      if (Object.keys(updates).length === 0) return true;
+
+      try {
+        await db.ref().update(updates);
+        if (!pedidosCache[whatsappPedidoId].pagos) pedidosCache[whatsappPedidoId].pagos = {};
+        if (!pedidosCache[whatsappPedidoId].cliente) pedidosCache[whatsappPedidoId].cliente = {};
+        if (alias) {
+          pedidosCache[whatsappPedidoId].pagos.alias = alias;
+          guardarAliasEnLocalStorage(alias);
+        }
+        pedidosCache[whatsappPedidoId].cliente.telefono = telefono;
+        return true;
+      } catch (e) {
+        console.error('Error guardando datos del modal:', e);
+        alert('Error al guardar en Firebase');
+        return false;
+      }
+    }
+
+    async function guardarDatosModal() {
+      if (!whatsappPedidoId) return;
+      const aliasInput = document.getElementById('waAliasInput').value.trim().toUpperCase();
+      const telefonoInput = document.getElementById('waTelefonoInput').value.trim();
+
+      if (!aliasInput && !telefonoInput) {
+        alert('Debe ingresar al menos un alias o un teléfono');
+        return;
+      }
+
+      const ok = await persistirDatosModal({ alias: aliasInput, telefono: telefonoInput });
+      if (ok) {
+        const btn = document.getElementById('waBtnGuardar');
+        const txtOriginal = btn.innerHTML;
+        btn.innerHTML = '✓ Guardado';
+        btn.disabled = true;
+        setTimeout(() => {
+          btn.innerHTML = txtOriginal;
+          btn.disabled = false;
+          cerrarModalWhatsapp();
+        }, 700);
+      }
+    }
+
+    async function enviarWhatsapp() {
+      if (!whatsappPedidoId) return;
+
+      const aliasInput = document.getElementById('waAliasInput').value.trim().toUpperCase();
+      if (!aliasInput) { alert('Debe ingresar un alias'); return; }
+
+      const telefonoInput = document.getElementById('waTelefonoInput').value.trim();
+      const telefonoDigits = telefonoInput.replace(/\D/g, '');
+      if (!telefonoDigits) { alert('Debe ingresar un teléfono'); return; }
+
+      const ok = await persistirDatosModal({ alias: aliasInput, telefono: telefonoInput });
+      if (!ok) return;
+
+      // Formatear teléfono: asegurar prefijo 54 para Argentina
+      let tel = telefonoDigits;
+      if (!tel.startsWith('54')) tel = '54' + tel;
+
+      const url = `https://api.whatsapp.com/send/?phone=${tel}&text=${encodeURIComponent(aliasInput)}`;
+      window.open(url, '_blank');
+      cerrarModalWhatsapp();
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      // Calcular fecha de hoy en Argentina (UTC-3) antes de armar la query
+      const now = new Date();
+      const argentinaTime = new Date(now.getTime() - (3 * 60 * 60 * 1000));
+      const fechaHoy = argentinaTime.toISOString().split('T')[0]; // YYYY-MM-DD
+
+      // Query optimizada: solo descarga registros del día de hoy desde Firebase.
+      // orderByChild('fecha') con startAt/endAt limita los datos en el servidor.
+      // createdby = admin se filtra en cliente (no requiere descarga extra).
+      db.ref('pedidos')
+        .orderByChild('fecha')
+        .startAt(fechaHoy)
+        .endAt(fechaHoy + '\uf8ff')
+        .on('value', snap => {
+          pedidosCache = {};
+          snap.forEach(child => {
+            const val = child.val();
+            if (val.createdby === 'admin') {
+              pedidosCache[child.key] = val;
+            }
+          });
+          renderPedidos();
+        });
+
+      // Permitir aplicar filtros con Enter en los campos de filtro
+      document.getElementById('filtroNombre').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') aplicarFiltros();
+      });
+    });
+
+    // === PAGINACIÓN ===
+    // Los pedidos del día ya vienen descargados y filtrados (fecha de hoy +
+    // createdby = admin). La paginación es 100% en cliente: solo se renderizan
+    // 30 filas por página, evitando construir cientos de nodos del DOM de una.
+    const PAGE_SIZE = 30;
+    let paginaActual = 1;
+
+    function renderPedidos() {
+      const tbody = document.getElementById('pedidosBody');
+      const pedidos = pedidosCache;
+      const filtroNombre = document.getElementById('filtroNombre').value.trim().toLowerCase();
+
+      // Los registros ya vienen filtrados por fecha de hoy y createdby = admin desde Firebase
+      let keys = Object.keys(pedidos).reverse();
+
+      if (filtroNombre) {
+        keys = keys.filter(id => (pedidos[id].cliente?.nombre || '').toLowerCase().includes(filtroNombre));
+      }
+
+      const totalRegistros = keys.length;
+      const totalPaginas = Math.max(1, Math.ceil(totalRegistros / PAGE_SIZE));
+      // Mantener la página dentro de rango (p. ej. si llegaron/cancelaron pedidos en vivo)
+      if (paginaActual > totalPaginas) paginaActual = totalPaginas;
+      if (paginaActual < 1) paginaActual = 1;
+
+      if (totalRegistros === 0) {
+        tbody.innerHTML = '<tr><td colspan="7">No hay pedidos del día de hoy que coincidan con los filtros.</td></tr>';
+        renderPaginacion(0, 1, 1);
+        return;
+      }
+
+      const inicio = (paginaActual - 1) * PAGE_SIZE;
+      const keysPagina = keys.slice(inicio, inicio + PAGE_SIZE);
+
+      // Render optimizado: se arma un array de filas y se asigna innerHTML una
+      // sola vez (un único reflow), en lugar de reconcatenar innerHTML por fila.
+      const filas = keysPagina.map(id => {
+        const p = pedidos[id];
+        const fecha = p.fecha || '';
+        const cliente = p.cliente || {};
+        const vendedor = p.vendedor || 'No asignado';
+        const isCancelado = (p.status || '').toUpperCase() === 'CANCELADO';
+        const pagos = p.pagos || {};
+        // totalFinal y subtotal pueden ser string o number, se fuerza a number si es posible
+        const totalFinal = pagos.totalFinal !== undefined ? `$${Number(pagos.totalFinal).toLocaleString('es-AR', {maximumFractionDigits:0})}` : '';
+        const medioPagoNorm = (pagos.medioPago || '').toString().trim().toLowerCase();
+        const waHabilitado = medioPagoNorm === 'transferencia' || medioPagoNorm === 'parcial';
+        return `
+          <tr${isCancelado ? ' style="background:#e0e0e0;color:#888;"' : ''}>
+            <td>${fecha}</td>
+            <td style="cursor:pointer;text-decoration:underline;color:#2a3d8f;" onclick="verPedido('${id}')">${cliente.nombre || ''}</td>
+            <td style="max-width:180px;white-space:pre-wrap;word-break:break-word;">${p.nota || ''}</td>
+            <td>${totalFinal}</td>
+            <td>${pagos.medioPago || ''}</td>
+            <td>${vendedor}</td>
+            <td>
+              <button onclick="abrirModalWhatsapp('${id}')" style="background:${waHabilitado ? '#25D366' : '#ccc'};padding:6px 10px;${waHabilitado ? '' : 'cursor:not-allowed;'}" title="${waHabilitado ? 'WhatsApp' : 'Solo disponible para pagos por transferencia o parcial'}"${waHabilitado ? '' : ' disabled'}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg></button>
+              <button onclick="verPedido('${id}')" style="background:#2a3d8f;padding:6px 10px;" title="Ver pedido"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></button>
+              <button onclick="imprimirPedido('${id}')" style="background:#555;padding:6px 10px;" title="Imprimir"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/><path d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 10a1 1 0 0 1-1-1V9h8v3a1 1 0 0 1-1 1H5z"/></svg></button>
+              <button onclick="cancelarPedido('${id}')" style="background:${isCancelado ? '#ccc' : '#f44336'};padding:6px 10px;${isCancelado ? 'cursor:not-allowed;' : ''}" title="Cancelar"${isCancelado ? ' disabled' : ''}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8z"/></svg></button>
+            </td>
+            </tr>
+        `;
+      });
+      tbody.innerHTML = filas.join('');
+
+      renderPaginacion(totalRegistros, paginaActual, totalPaginas);
+    }
+
+    // Dibuja la barra de paginación (info + botones anterior/siguiente)
+    function renderPaginacion(totalRegistros, pagina, totalPaginas) {
+      const cont = document.getElementById('paginacion');
+      if (!cont) return;
+      if (totalRegistros === 0) {
+        cont.innerHTML = '';
+        return;
+      }
+      const desde = (pagina - 1) * PAGE_SIZE + 1;
+      const hasta = Math.min(pagina * PAGE_SIZE, totalRegistros);
+      const prevDisabled = pagina <= 1;
+      const nextDisabled = pagina >= totalPaginas;
+      cont.innerHTML = `
+        <span style="color:#444;font-size:0.9rem;">Mostrando ${desde}-${hasta} de ${totalRegistros}</span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button onclick="paginaAnterior()" style="background:${prevDisabled ? '#ccc' : '#39373f'};${prevDisabled ? 'cursor:not-allowed;' : ''}"${prevDisabled ? ' disabled' : ''}>‹ Anterior</button>
+          <span style="color:#444;font-size:0.9rem;">Página ${pagina} de ${totalPaginas}</span>
+          <button onclick="paginaSiguiente()" style="background:${nextDisabled ? '#ccc' : '#39373f'};${nextDisabled ? 'cursor:not-allowed;' : ''}"${nextDisabled ? ' disabled' : ''}>Siguiente ›</button>
+        </div>
+      `;
+    }
+
+    function paginaAnterior() {
+      if (paginaActual > 1) { paginaActual--; renderPedidos(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    }
+    function paginaSiguiente() {
+      paginaActual++; renderPedidos(); window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function aplicarFiltros() {
+      paginaActual = 1; // al cambiar el filtro, volver a la primera página
+      renderPedidos();
+    }
+    function limpiarFiltros() {
+      document.getElementById('filtroNombre').value = '';
+      paginaActual = 1;
+      renderPedidos();
+    }
+    function verPedido(id) {
+      window.open(`ingresoPedido.html?id=${id}`, '_blank');
+    }
+    
+    // ====================================================================
+    // IMPRESIÓN ESC-POS (fuente nativa FONTA de la 3nStar RPT008 vía QZ Tray)
+    // ====================================================================
+    // El navegador no puede mandar bytes ESC-POS por window.print() (siempre
+    // rasteriza). QZ Tray es una app local que recibe la orden desde la web y
+    // envía texto crudo a la impresora, que lo dibuja con su generador interno
+    // FONTA: nítido y definido, no un mapa de bits.
+
+    // Nombre exacto de la impresora como figura en Windows.
+    // null = usar la impresora por defecto del sistema.
+    const POS_PRINTER_NAME = 'POS-80C';
+
+    // Ancho de línea de FONTA a 72 mm según el selftest: 48 caracteres.
+    const POS_COLS = 48;
+
+    // Normaliza a ASCII/PC437 (Page0, code page por defecto de la impresora):
+    // sin esto, acentos y ñ saldrían como basura en modo texto.
+    function posPlain(val) {
+      if (val === null || val === undefined) return '';
+      return String(val)
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[¿¡]/g, '')
+        .replace(/[^\x00-\x7F]/g, '');
+    }
+
+    // Helpers de formato a 48 columnas
+    function posSep() { return '-'.repeat(POS_COLS) + '\n'; }
+
+    function posFila(izq, der) {
+      izq = posPlain(izq); der = posPlain(der);
+      const espacio = POS_COLS - izq.length - der.length;
+      if (espacio < 1) {
+        izq = izq.slice(0, Math.max(0, POS_COLS - der.length - 1));
+        return izq + ' ' + der + '\n';
+      }
+      return izq + ' '.repeat(espacio) + der + '\n';
+    }
+
+    function posWrap(texto) {
+      texto = posPlain(texto);
+      let out = '';
+      while (texto.length > POS_COLS) {
+        out += texto.slice(0, POS_COLS) + '\n';
+        texto = texto.slice(POS_COLS);
+      }
+      return out + texto + '\n';
+    }
+
+    // Comandos ESC-POS como bytes hex / texto plano (formato que entiende QZ)
+    const escCmd = (hex) => ({ type: 'raw', format: 'hex', data: hex });
+    const escTxt = (s) => ({ type: 'raw', format: 'plain', data: s });
+
+    // Construye el documento ESC-POS completo del recibo.
+    // conLogo=false omite la imagen (el logo es lo único raster; si la
+    // impresora/QZ no lo puede procesar, igual sale todo el texto nativo).
+    function construirESCPOS(pedido, conLogo, id) {
+      const cliente = pedido.cliente || {};
+      const nombre = cliente.nombre || '';
+      const telefono = cliente.telefono || '';
+      const pagos = pedido.pagos || {};
+      const medioPago = pagos.medioPago || '';
+
+      const parseNum = (val) => {
+        if (val === null || val === undefined || val === '') return NaN;
+        if (typeof val === 'number') return val;
+        const clean = String(val).replace(/[^\d,.-]/g, '');
+        return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+      };
+      const soloEntero = (val) => {
+        if (val === null || val === undefined || val === '') return '';
+        const n = parseNum(val);
+        if (isNaN(n)) return String(val);
+        return Math.round(n).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+      };
+      const ultimos5BC = (cb) => {
+        if (!cb) return '';
+        return String(cb).split(',').map(s => s.replace(/\D/g, '').slice(-5)).filter(Boolean).join(' ');
+      };
+
+      const data = [];
+      data.push(escCmd('1B40'));   // ESC @  -> reset
+      data.push(escCmd('1B7400')); // ESC t 0 -> code page PC437 (Page0)
+      data.push(escCmd('1B5200')); // ESC R 0 -> juego de caracteres USA
+
+      // Encabezado centrado
+      data.push(escCmd('1B6101')); // centrar
+      if (conLogo) {
+        // Logo: única parte raster. Si QZ/impresora no lo procesa, se
+        // reintenta sin logo (ver imprimirReciboESCPOS) y el texto igual sale.
+        try {
+          const logoUrl = new URL('logo.png', window.location.href).href;
+          data.push({ type: 'raw', format: 'image', flavor: 'file', data: logoUrl,
+                      options: { language: 'ESCPOS', dotDensity: 'double' } });
+          data.push(escTxt('\n'));
+        } catch (e) { /* sin logo, el ticket igual sale */ }
+      } else {
+        // Sin logo: nombre del local como texto nativo (doble alto/ancho)
+        data.push(escCmd('1D2111')); // GS ! 0x11 -> doble alto y ancho
+        data.push(escTxt('HOMEPOINT\n'));
+        data.push(escCmd('1D2100')); // GS ! 0x00 -> tamaño normal
+      }
+      data.push(escTxt('\n'));
+      data.push(escTxt('Velez Sarsfield 4127, Munro\n'));
+      data.push(escTxt('Tel. 11 2189-1006\n'));
+      data.push(escTxt('\n')); // línea en blanco antes del título
+      data.push(escCmd('1B4501')); // negrita on
+      data.push(escTxt('PRESUPUESTO\n'));
+      data.push(escCmd('1B4500')); // negrita off
+      data.push(escTxt(posPlain(new Date(pedido.timestamp).toLocaleString('es-AR', { hour12: false })) + '\n'));
+
+      // Cuerpo alineado a la izquierda
+      data.push(escCmd('1B6100'));
+      data.push(escTxt(posSep()));
+      data.push(escTxt(posWrap('Nombre: ' + nombre)));
+      data.push(escTxt(posWrap('Telefono: ' + telefono)));
+      data.push(escTxt(posSep()));
+
+      if (pedido.items && Array.isArray(pedido.items)) {
+        pedido.items.forEach(it => {
+          const cant = it.cantidad || 0;
+          const vU = it.valorU || 0;
+          const vTotal = cant * vU;
+          const bc = ultimos5BC(it.codigoBarras);
+          data.push(escCmd('1B4501'));
+          data.push(escTxt(posWrap((it.nombre || '').toUpperCase())));
+          data.push(escCmd('1B4500'));
+          data.push(escTxt(posFila(cant + ' x ' + soloEntero(vU), soloEntero(vTotal))));
+          data.push(escTxt(posWrap('COD.' + (it.codigo || '') + (bc ? ' - ' + bc : ''))));
+        });
+      }
+
+      data.push(escTxt(posSep()));
+      data.push(escTxt(posFila('Subtotal', soloEntero(pagos.subtotal))));
+      data.push(escTxt(posFila('Medio de Pago', medioPago)));
+      if (parseNum(pagos.recargo)) data.push(escTxt(posFila('Recargo', soloEntero(pagos.recargo))));
+      if (parseNum(pagos.descuento)) data.push(escTxt(posFila('Descuento', soloEntero(pagos.descuento))));
+      if (parseNum(pagos.envio)) data.push(escTxt(posFila('Costo de Envio', soloEntero(pagos.envio))));
+      data.push(escCmd('1B4501'));
+      data.push(escTxt(posFila('TOTAL', '$ ' + soloEntero(pagos.totalFinal))));
+      data.push(escCmd('1B4500'));
+
+      data.push(escTxt(posSep()));
+      data.push(escCmd('1B6101')); // centrar leyenda
+      data.push(escCmd('1B4501'));
+      data.push(escTxt(posWrap('- DOCUMENTO NO VALIDO COMO FACTURA -')));
+      data.push(escCmd('1B4500'));
+
+      // ID de pedido (últimos 8 caracteres en mayúscula), discreto y centrado al pie del ticket
+      if (id) {
+        data.push(escTxt('\n'));
+        data.push(escTxt(posWrap(String(id).slice(-8).toUpperCase())));
+      }
+
+      data.push(escTxt('\n\n\n'));
+      data.push(escCmd('1D564203')); // GS V 66 3 -> avanza y corta (parcial)
+      return data;
+    }
+
+    // QZ Tray — certificado propio (importar C:\Users\alero\.claude\qz-cert.pem en Site Manager para eliminar el diálogo).
+    let qzConfigurado = false;
+    function configurarQZ() {
+      if (qzConfigurado || typeof qz === 'undefined') return;
+      const QZ_CERT = `-----BEGIN CERTIFICATE-----
+MIIDXTCCAkWgAwIBAgIUPMCoqhpYQ4z55zCYiyngpH47VAwwDQYJKoZIhvcNAQEL
+BQAwPjELMAkGA1UEBhMCQVIxEjAQBgNVBAoMCUhvbWVQb2ludDEbMBkGA1UEAwwS
+SG9tZVBvaW50IEFkbWluIFFaMB4XDTI2MDUxOTE2NTAxOFoXDTM2MDUxNjE2NTAx
+OFowPjELMAkGA1UEBhMCQVIxEjAQBgNVBAoMCUhvbWVQb2ludDEbMBkGA1UEAwwS
+SG9tZVBvaW50IEFkbWluIFFaMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKC
+AQEA0G3Pek2EDxsUuyRoqYttHqkmudOhJ56FrUqqdks01dB52+kfoElM995N4Xqm
+GkBTkPLV30lUkEF1W5xKdCe3DcTp0qcZpIDf2468SKlvyi4WI9ji8rIBB4b/jN6l
+ECKUooi4iEeihKQ2WY2o7d7vhD52ITvJ9rKXJ1TWe9yyaW2sz3b7DfGKqZv+VwWY
+bQfZwLtymkGOi0IIplHwWmRoQdrl3rXE8tOIeB7Br15vKbIoXGwkV6W4rVmg+ngA
+M0BYqmcg08hRXZqUZ1nmyNsRrXijTv6D8qLvefO7D3eqIKXs0okmacGWZzfGLGnD
+YlEXTAVnMNmolKaRSVNVbF230wIDAQABo1MwUTAdBgNVHQ4EFgQUJbmYNOzALjUF
+zMY93JIwa2M6bi8wHwYDVR0jBBgwFoAUJbmYNOzALjUFzMY93JIwa2M6bi8wDwYD
+VR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAYO72+pxaqZifKkimB0tw
+mvKuqEfOOiXBawh7xBlLaTvHDaVH6v6ABqj7S73vSRBiD00oFKf5FQ42I+O1bUoN
+QYdIsxA2Q8ka7HaxMTB5v4ZBvbyXWLrRIavwY5XI2JWzArvZ8oTKB/gHF5lo9yDI
+nfvKQ9SL9y+GfwHOGkmUaw2ViScT17KdMJzSWoE37Qasp50Du+boRdmOgL0fN4nL
+zRY73MMEek1ny+DkbJ2OR7vmF2FSHaPqJzZb+UCINC3Pbf5KxqUPn+K2CEfT53hW
+3ALNhGIFw9E7pN6IE5LEdNkZCwpZRDksRo3UeBVcowsdmKzZ7Uwbe1dzxygzaLxX
+tw==
+-----END CERTIFICATE-----`;
+      const QZ_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDQbc96TYQPGxS7
+JGipi20eqSa506EnnoWtSqp2SzTV0Hnb6R+gSUz33k3heqYaQFOQ8tXfSVSQQXVb
+nEp0J7cNxOnSpxmkgN/bjrxIqW/KLhYj2OLysgEHhv+M3qUQIpSiiLiIR6KEpDZZ
+jajt3u+EPnYhO8n2spcnVNZ73LJpbazPdvsN8Yqpm/5XBZhtB9nAu3KaQY6LQgim
+UfBaZGhB2uXetcTy04h4HsGvXm8psihcbCRXpbitWaD6eAAzQFiqZyDTyFFdmpRn
+WebI2xGteKNO/oPyou9587sPd6ogpezSiSZpwZZnN8YsacNiURdMBWcw2aiUppFJ
+U1VsXbfTAgMBAAECggEACsutQ+3w6aFi9QCBRUrZ940WWuipv7YXwW6NHrxte6el
+MC1GfJRfXrVOfl/Oa6yqR2c0ibCwJxqk2/5f4t1Nv3JUFBugmeMs9R/TA8Z26ldx
+wSCSPLTYlc25vc+oaAoKfdKsEC75rXod8IyEU/HIoSZlEvqYTuVYK+ragybevNQf
+69UNrSovGjHuwDj3+tyZh0V7/Tp9Ch3iDRxFEZeqXtH0C8g4SxR0pTafyAIasyhV
+q6Y2ETEJWMVNUIIyrqtvWIQsewV6ykwUns09Qi6mFbBtz8uCLPsSyV7FccpOuWEk
+evL37yDL6HwdzA/xDnBST+eZeaRqBkB9rZs4W0kjpQKBgQD7fBZdudKO1/63AND4
+0DeVW/g3XZ6JiqBNFTtY1Q3pZRKbJhS+fSrZdReI7/7SZg9Tpgp9L6ih0aGe/Xqm
+Utz2SHQEk9D5nr8aTmn6E/YK956XuW1h6OGAdvxYfnnJibMIzT6yVVDYlFY1olj/
+VzXsmT0NM1JO/T4MCCfAKicEfwKBgQDUK9LU5NE/SaLwXslUK+jccTSP6cGUn+D0
+2IVTsccrh1lnD1ZlMoUR+5RTXAV5cyBzDL3ogvhpHTTaS8LGrJsw6c9wUvlbAVis
+hZ9WhXcC/U62ww5wZXFb+ShrYqrOLIv1Ul62Ixdoi2wofUOzT13tyGVgfuAtdeJ5
+QY4US/FSrQKBgQCKNi5MoH26B7dzeD1hIX4K1hrawtcInGlxM8QEFEOrC+Nn5Uvt
+TPkpvhKLLesMUw8FV/HXz0OMe5upt4Gau1u49yTcBykIp1g76vCPgjzs1h4RINWe
+w9B7O+l/8TKZstX0dmiIth7SiOPAYlMrMhDu0WEeSiBoTQG2txyxnfkHnQKBgHP9
+kUD55rrmksE90GrHpoH9EXMro7yQuvaf+CONKQlO8T06UUz5lW4DT09TG1sN6Ut8
+R8X487zjTqWYjV73tc/DwrfxZIiv775BPp6aUDm+KW4YrKgdjR9u0v4B7sbP66Ot
+6EFCZeWtcu+fq4c3eG4qA+IA+qVfsPQBNp859S/xAoGBALKK0Wx/OHaWPrAaThP0
+swiTwxojtYcW2WoyuWXzJClYn1id6V+kpFuDiLDJjg6ngdeXvZ9BHRY8J/eWe1JE
+0YPZcP39H64LvTr+s65TtMrhCs5eNKd5hiGAB0T5Ctardy4f5liqQ8EqNa7YzcR/
+8xJFkCasp5SwyHnKysUl8ViY
+-----END PRIVATE KEY-----`;
+      qz.security.setCertificatePromise((resolve) => resolve(QZ_CERT));
+      qz.security.setSignatureAlgorithm('SHA512');
+      qz.security.setSignaturePromise(function(toSign) {
+        return function(resolve, reject) {
+          const pem = QZ_KEY.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
+          const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
+          crypto.subtle.importKey('pkcs8', der.buffer,
+            { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' }, false, ['sign'])
+            .then(function(key) {
+              return crypto.subtle.sign('RSASSA-PKCS1-v1_5', key,
+                new TextEncoder().encode(toSign));
+            })
+            .then(function(sig) {
+              const bytes = new Uint8Array(sig);
+              let str = '';
+              for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+              resolve(btoa(str));
+            })
+            .catch(reject);
+        };
+      });
+      qzConfigurado = true;
+    }
+
+    async function conectarQZ() {
+      if (typeof qz === 'undefined') throw new Error('La librería de QZ Tray no se cargó');
+      configurarQZ();
+      if (qz.websocket.isActive()) return;
+      await qz.websocket.connect();
+    }
+
+    async function seleccionarImpresoraPOS() {
+      if (POS_PRINTER_NAME) return POS_PRINTER_NAME;
+      let lista = await qz.printers.find();
+      if (!Array.isArray(lista)) lista = [lista];
+      const m = lista.find(n => /3n[\s-]?star|rpt[\s-]?008|pos[\s-]?80|thermal|ticket/i.test(n));
+      if (m) return m;
+      return await qz.printers.getDefault();
+    }
+
+    async function imprimirReciboESCPOS(pedido, id) {
+      await conectarQZ();
+      const printerName = await seleccionarImpresoraPOS();
+      if (!printerName) throw new Error('No se encontró ninguna impresora');
+      const config = qz.configs.create(printerName, { encoding: 'CP437' });
+      try {
+        // Intento 1: con logo (imagen raster)
+        await qz.print(config, construirESCPOS(pedido, true, id));
+      } catch (eLogo) {
+        // Intento 2: sin logo (solo texto nativo). Si esto también falla,
+        // se propaga el error y el llamador ofrece el respaldo HTML.
+        console.warn('Print con logo falló, reintentando sin logo:', eLogo);
+        await qz.print(config, construirESCPOS(pedido, false, id));
+      }
+    }
+
+    async function imprimirPedido(id) {
+      // Usar caché local: el pedido ya fue descargado, no se hace otro fetch a Firebase
+      const pedido = pedidosCache[id];
+      if (!pedido) {
+        alert('Pedido no encontrado');
+        return;
+      }
+      try {
+        // Camino principal: modo texto ESC-POS con la fuente nativa FONTA
+        await imprimirReciboESCPOS(pedido, id);
+      } catch (e) {
+        // El fallback NO es silencioso: mostramos el motivo real para poder
+        // diagnosticar por qué no entró el modo ESC-POS.
+        console.error('Fallo impresión ESC-POS:', e);
+        let motivo = (e && e.message) ? e.message : String(e);
+        if (typeof qz === 'undefined') {
+          motivo = 'La librería de QZ Tray no se cargó (¿sin internet o CDN bloqueado?).';
+        } else if (!qz.websocket.isActive()) {
+          motivo = 'No se pudo conectar con QZ Tray. Verificá que QZ Tray esté instalado y CORRIENDO (ícono en la bandeja del sistema).\n\nDetalle técnico: ' + motivo;
+        }
+        const usarHTML = confirm(
+          'No se pudo imprimir en modo ESC-POS (fuente nativa).\n\n' +
+          motivo + '\n\n' +
+          '¿Querés imprimir con el método HTML de respaldo (menos nítido)?'
+        );
+        if (usarHTML) generarReciboYImprimir(pedido, id);
+      }
+    }
+    
+    function generarReciboYImprimir(pedido, id) {
+      // Obtener datos del pedido
+      const cliente = pedido.cliente || {};
+      const nombre = cliente.nombre || '';
+      const telefono = cliente.telefono || '';
+      const pagos = pedido.pagos || {};
+      const medioPago = pagos.medioPago || '';
+      const subtotal = pagos.subtotal;
+      const recargo = pagos.recargo;
+      const descuento = pagos.descuento;
+      const envio = pagos.envio;
+      const totalFinal = pagos.totalFinal;
+
+      // Helper: parsea cualquier valor a número (soporta formato es-AR)
+      const parseNum = (val) => {
+        if (val === null || val === undefined || val === '') return NaN;
+        if (typeof val === 'number') return val;
+        const clean = String(val).replace(/[^\d,.-]/g, '');
+        // Formato es-AR: '.' separador de miles, ',' decimal
+        return parseFloat(clean.replace(/\./g, '').replace(',', '.'));
+      };
+
+      // Helper: convierte cualquier valor a entero formateado es-AR (sin decimales)
+      const soloEntero = (val) => {
+        if (val === null || val === undefined || val === '') return '';
+        const n = parseNum(val);
+        if (isNaN(n)) return String(val);
+        return Math.round(n).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+      };
+
+      // Helper: últimos 5 dígitos de cada código de barras asignado
+      const ultimos5BC = (cb) => {
+        if (!cb) return '';
+        return String(cb)
+          .split(',')
+          .map(s => s.replace(/\D/g, '').slice(-5))
+          .filter(Boolean)
+          .join(' ');
+      };
+
+      // Helper: normaliza texto para la impresora POS 3nStar RPT008.
+      // Su code page por defecto es Page0 (PC437 Std.Europe), que NO incluye
+      // á é í ó ú ñ ü ¿ ¡. Sin esta normalización los acentos saldrían como
+      // caracteres basura en el ticket. Se descomponen los diacríticos (NFD),
+      // se eliminan las marcas combinantes y se descarta cualquier byte no ASCII.
+      const posText = (val) => {
+        if (val === null || val === undefined) return '';
+        return String(val)
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '')
+          .replace(/¿|¡/g, '')
+          .replace(/[^\x00-\x7F]/g, '');
+      };
+
+      // Items en formato ticket
+      let itemsHtml = '';
+      if (pedido.items && Array.isArray(pedido.items)) {
+        pedido.items.forEach(it => {
+          const cant = it.cantidad || 0;
+          const vU = it.valorU || 0;
+          const vTotal = cant * vU;
+          const bc = ultimos5BC(it.codigoBarras);
+          itemsHtml += `
+            <div class="item">
+              <div class="item-nombre">${(it.nombre || '').toUpperCase()}</div>
+              <div class="item-linea">
+                <span>${cant} x ${soloEntero(vU)}</span>
+                <span>${soloEntero(vTotal)}</span>
+              </div>
+              <div class="item-cod">COD.${it.codigo || ''}${bc ? ' - ' + bc : ''}</div>
+            </div>`;
+        });
+      }
+      // Recibo HTML (formato ticket, ancho máx 8cm)
+      const reciboHtml = `
+        <html>
+        <head>
+          <title>Orden de Pedido</title>
+          <style>
+            /* 3nStar RPT008: ancho de papel 80mm, área imprimible 72mm (ver selftest).
+               El cuadro se limita a 72mm para que nada se recorte ni se reescale. */
+            @page { size: 80mm auto; margin: 0; }
+            html, body { margin: 0; padding: 0; }
+            /* Tamaño de fuente único para todo el ticket: la variación de
+               tamaños se elimina; solo se conserva negrita para jerarquía. */
+            body { font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.35; color: #000; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .recibo-box { width: 72mm; max-width: 72mm; margin: 0 auto; padding: 6px 4px; background: #fff; box-sizing: border-box; }
+            .logo { display: block; margin: 0 auto 6px auto; max-width: 60mm; max-height: 22mm; object-fit: contain; }
+            .local { text-align: center; }
+            .titulo { text-align: center; font-weight: bold; margin: 1.4em 0 4px 0; }
+            .fecha { text-align: center; margin-bottom: 6px; }
+            .datos { }
+            .sep { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+            .item { margin-bottom: 6px; }
+            .item-nombre { font-weight: bold; word-break: break-word; }
+            .item-linea { display: flex; justify-content: space-between; }
+            .item-cod { color: #000; }
+            .tot { padding: 2px 2px; }
+            .tot-fila { display: flex; justify-content: space-between; padding: 1px 0; }
+            .tot-final { font-weight: bold; }
+            .legend { text-align: center; font-weight: bold; margin-top: 12px; }
+            .pedido-id { text-align: center; margin-top: 10px; font-size: 9px; color: #555; }
+            @media print { button { display: none !important; } }
+          </style>
+        </head>
+        <body>
+          <div class='recibo-box'>
+            <img src="logo.png" alt="Logo" class="logo">
+            <div class="local">Vélez Sársfield 4127, Munro</div>
+            <div class="local">Tel. 11 2189-1006</div>
+            <div class="titulo">PRESUPUESTO</div>
+            <div class="fecha">${new Date(pedido.timestamp).toLocaleString('es-AR', { hour12: false })}</div>
+            <hr class="sep">
+            <div class="datos">
+              <div>Nombre: ${nombre}</div>
+              <div>Telefono: ${telefono}</div>
+            </div>
+            <hr class="sep">
+            ${itemsHtml}
+            <hr class="sep">
+            <div class="tot">
+              <div class="tot-fila"><span>Subtotal</span><span>${soloEntero(subtotal)}</span></div>
+              <div class="tot-fila"><span>Medio de Pago</span><span>${medioPago}</span></div>
+              ${parseNum(recargo) ? `<div class="tot-fila"><span>Recargo</span><span>${soloEntero(recargo)}</span></div>` : ''}
+              ${parseNum(descuento) ? `<div class="tot-fila"><span>Descuento</span><span>${soloEntero(descuento)}</span></div>` : ''}
+              ${parseNum(envio) ? `<div class="tot-fila"><span>Costo de Envío</span><span>${soloEntero(envio)}</span></div>` : ''}
+              <div class="tot-fila tot-final"><span>TOTAL</span><span>$ ${soloEntero(totalFinal)}</span></div>
+            </div>
+            <hr class="sep">
+            <div class="legend">- DOCUMENTO NO VALIDO COMO FACTURA -</div>
+            ${id ? `<div class="pedido-id">${String(id).slice(-8).toUpperCase()}</div>` : ''}
+          </div>
+          <script>window.onload = function(){ window.print(); }<\/script>
+        </body>
+        </html>
+      `;
+
+      // Abrir ventana e imprimir.
+      // Una única pasada por posText() normaliza TODO el ticket (texto fijo y
+      // dinámico) a ASCII/PC437, el code page por defecto de la 3nStar RPT008.
+      const w = window.open('', '_blank', 'width=600,height=800');
+      w.document.write(posText(reciboHtml));
+      w.document.close();
+    }
+    
+    // === ACTUALIZACIÓN DE STOCK EN TIEMPO REAL ===
+    /**
+     * Actualiza el stock de un artículo usando transacciones de Firebase para garantizar atomicidad.
+     * @param {string} codigo - Código del artículo
+     * @param {string} nombre - Nombre del artículo
+     * @param {number} cantidad - Cantidad a modificar
+     * @param {string} tipo - Tipo de movimiento: 'ENTRADA', 'SALIDA', 'RETIRO'
+     */
+    async function actualizarStock(codigo, nombre, cantidad, tipo) {
+      if (!codigo || !nombre || !cantidad) return;
+      
+      const stockRef = db.ref('stock/' + codigo);
+      
+      try {
+        await stockRef.transaction(function(currentData) {
+          // Si no existe data previa, crear objeto base
+          if (currentData === null) {
+            currentData = {
+              nombre: nombre,
+              stockActual: 0
+            };
+          }
+          
+          let stockActual = currentData.stockActual || 0;
+          
+          // Calcular nuevo stock según tipo de movimiento
+          if (tipo === 'ENTRADA') {
+            stockActual += cantidad;
+          } else if (tipo === 'SALIDA' || tipo === 'RETIRO') {
+            stockActual -= cantidad;
+          }
+          
+          // Stock mínimo es 0
+          stockActual = Math.max(0, stockActual);
+          
+          // Preservar todos los campos existentes y solo actualizar stockActual
+          return {
+            ...currentData,
+            nombre: nombre,
+            stockActual: stockActual
+          };
+        });
+      } catch (error) {
+        console.error('Error actualizando stock:', error, { codigo, nombre, cantidad, tipo });
+      }
+    }
+    
+    async function cancelarPedido(id) {
+      const clave = prompt('Ingrese la contraseña para cancelar el pedido:');
+      if (clave === null) return;
+      if (clave !== '2574') { alert('Contraseña incorrecta'); return; }
+      if (!confirm('¿Seguro que desea cancelar este pedido? Esta acción es IRREVERSIBLE y el pedido no podrá ser modificado ni reactivado.')) return;
+      
+      try {
+        // Primero obtener los movimientos antes de eliminarlos
+        const movimientosSnap = await db.ref('movimientos').orderByChild('pedidoId').equalTo(id).once('value');
+        const movimientos = movimientosSnap.val();
+        
+        // Restaurar stock solo si hay movimientos de SALIDA
+        if (movimientos) {
+          const movimientosArray = Object.values(movimientos);
+          const movimientosSalida = movimientosArray.filter(mov => mov.tipo === 'SALIDA');
+          
+          if (movimientosSalida.length > 0) {
+            // Restaurar stock sumando las cantidades que se habían restado
+            for (const mov of movimientosSalida) {
+              if (mov.codigo && mov.nombre && mov.cantidad) {
+                // Restaurar sumando la cantidad (revertir la SALIDA)
+                await actualizarStock(mov.codigo, mov.nombre, mov.cantidad, 'ENTRADA');
+              }
+            }
+          }
+          
+          // Eliminar los movimientos
+          const updates = {};
+          Object.keys(movimientos).forEach(key => {
+            updates[key] = null;
+          });
+          await db.ref('movimientos').update(updates);
+        }
+        
+        // Actualizar el pedido como cancelado
+        await db.ref('pedidos/' + id).update({ 
+          status: 'CANCELADO', 
+          locked: true, 
+          movimientosRegistrados: false 
+        });
+        
+        alert('Pedido cancelado. Ya no podrá ser modificado. Los movimientos asociados han sido eliminados y el stock ha sido restaurado.');
+      } catch (e) {
+        console.error('Error al cancelar pedido:', e);
+        alert('Error al cancelar o eliminar movimientos');
+      }
+    }
+  </script>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; background: #f1f1f1; }
+    main { max-width: 1000px; margin: 30px auto; background: #fff; border-radius: 8px; padding: 24px; }
+    header {background: linear-gradient(90deg, #5c5866, #989899); padding: 1.5rem 1rem 1.5rem 1rem; box-shadow: #5c5866 0px 2px 8px 0px; text-align: center;}
+    header h1 {margin: 0; font-size: 2.2rem; color: #39373f; letter-spacing: 1px; font-weight: 700;}
+    table { width: 100%; min-width: 1000px; border-collapse: collapse; margin-top: 20px; background: #fff; }
+    th, td { padding: 10px; border: 1px solid #ddd; text-align: center; }
+    th { background: #5c5866; color: #fff; }
+    tr:nth-child(even) { background: #f9f9f9; }
+    button { margin: 0 2px; padding: 6px 12px; border-radius: 4px; border: none; background: #f44336; color: #fff; cursor: pointer; }
+    button:hover { background: #d8382c; }
+    #filtroNombre {
+      width: 220px;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>📦 Historial Reciente 📝</h1>
+</header>
+  <main>
+    <div style="margin-bottom: 16px; display: flex; gap: 20px; align-items: center;">
+      <input type="text" id="filtroNombre" placeholder="Filtrar por nombre" style="padding: 6px; border-radius: 4px; border: 1px solid #ccc;">
+      <button style="background:#39373f;" onclick="aplicarFiltros()">Filtrar</button>
+      <button style="background:#888;" onclick="limpiarFiltros()">Limpiar</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Fecha</th>
+          <th>Nombre</th>
+          <th>Nota</th>
+          <th>Total</th>
+          <th>Pago</th>
+          <th>Vendedor</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="pedidosBody">
+        <tr><td colspan="7">Cargando...</td></tr>
+      </tbody>
+    </table>
+    <div id="paginacion" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:18px;"></div>
+  </main>
+
+  <!-- Modal WhatsApp Alias -->
+  <div id="waModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
+    <div style="background:#fff;border-radius:14px;padding:24px;width:100%;max-width:420px;box-shadow:0 12px 32px rgba(0,0,0,0.25);box-sizing:border-box;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #eee;">
+        <h3 style="margin:0;font-size:1.15rem;color:#222;font-weight:700;">Contacto WhatsApp</h3>
+        <button onclick="cerrarModalWhatsapp()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#888;padding:0;line-height:1;margin:0;" title="Cerrar">&times;</button>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label for="waTelefonoInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Teléfono</label>
+        <input type="tel" id="waTelefonoInput" placeholder="Ej: 11 2189-1006" style="width:100%;padding:10px 12px;border:2px solid #ccc;border-radius:6px;font-size:1rem;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#25D366'" onblur="this.style.borderColor='#ccc'">
+      </div>
+
+      <div style="margin-bottom:20px;">
+        <label for="waAliasInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Alias</label>
+        <input type="text" id="waAliasInput" list="waAliasDatalist" placeholder="Ingrese o seleccione un alias" style="width:100%;padding:10px 12px;border:2px solid #ccc;border-radius:6px;font-size:1rem;text-transform:uppercase;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#25D366'" onblur="this.style.borderColor='#ccc'">
+        <datalist id="waAliasDatalist"></datalist>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button onclick="enviarWhatsapp()" style="width:100%;padding:12px;background:#25D366;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin:0;transition:background 0.15s;" onmouseover="this.style.background='#1ebe5b'" onmouseout="this.style.background='#25D366'">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="white" viewBox="0 0 16 16"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg>
+          Enviar WhatsApp
+        </button>
+        <button id="waBtnGuardar" onclick="guardarDatosModal()" style="width:100%;padding:11px;background:#fff;color:#2a3d8f;border:2px solid #2a3d8f;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin:0;transition:all 0.15s;" onmouseover="this.style.background='#2a3d8f';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#2a3d8f'">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm0-1h9.5L16 4.5V14a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z"/><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h5A1.5 1.5 0 0 1 11 4.5v2A1.5 1.5 0 0 1 9.5 8h-5A1.5 1.5 0 0 1 3 6.5v-2zM4.5 4a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h5a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-5z"/></svg>
+          Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Cerrar modal con Escape y enviar con Enter
+    document.addEventListener('keydown', function(e) {
+      if (document.getElementById('waModal').style.display === 'flex') {
+        if (e.key === 'Escape') cerrarModalWhatsapp();
+        if (e.key === 'Enter' && document.activeElement.id === 'waAliasInput') enviarWhatsapp();
+      }
+    });
+    // Cerrar modal al hacer clic fuera
+    document.getElementById('waModal').addEventListener('click', function(e) {
+      if (e.target === this) cerrarModalWhatsapp();
+    });
+  </script>
+</body>
+</html>

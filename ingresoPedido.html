@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Ingreso de Pedido</title>
+  <link rel="icon" href="faviconnegro.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Agregar Select2 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+  <style>
+    /* Estilos para el buscador de artículos */
+    .search-result-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #e9ecef;
+      transition: background-color 0.2s ease;
+    }
+    
+    .search-result-item:hover,
+    .search-result-item.keyboard-selected {
+      background-color: #e7f1ff;
+      border-left: 3px solid #6c4eb6;
+      padding-left: 9px;
+    }
+    
+    .search-result-item.keyboard-selected {
+      background-color: #c6b1da;
+    }
+    
+    .search-result-item:last-child {
+      border-bottom: none;
+    }
+    
+    .search-result-img {
+      width: 50px;
+      height: 50px;
+      object-fit: cover;
+      border-radius: 4px;
+      margin-right: 12px;
+      flex-shrink: 0;
+    }
+    
+    .search-result-img-placeholder {
+      width: 50px;
+      height: 50px;
+      background: #dee2e6;
+      border-radius: 4px;
+      margin-right: 12px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #adb5bd;
+      font-size: 12px;
+    }
+    
+    .search-result-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .search-result-name {
+      font-weight: 600;
+      color: #333;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .search-result-code {
+      font-size: 12px;
+      color: #6c757d;
+      margin-top: 2px;
+    }
+    
+    .search-no-results {
+      padding: 16px;
+      text-align: center;
+      color: #6c757d;
+      font-size: 14px;
+    }
+
+        /* Login Overlay */
+        .login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            padding: 1rem;
+        }
+
+        .login-card {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 2.5rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            animation: fadeInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .login-logo {
+            width: 200px;
+            height: auto;
+            margin-bottom: 1.5rem;
+        }
+
+        .login-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 0.5rem;
+        }
+
+        .login-subtitle {
+            font-size: 0.875rem;
+            color: #475569;
+            margin-bottom: 2rem;
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 0.6rem 0.875rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            transition: border-color 0.3s ease;
+            color: #1e293b;
+            background: #ffffff;
+            box-sizing: border-box;
+        }
+
+        .login-input:focus {
+            outline: none;
+            border-color: #6c4eb6;
+            box-shadow: 0 0 0 3px rgba(108, 78, 182, 0.1);
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 0.875rem;
+            background: linear-gradient(135deg, #6c4eb6, #8b6bc7);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin-top: 0.5rem;
+        }
+
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(108, 78, 182, 0.3);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .login-error {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+            padding: 0.75rem;
+            border-radius: 12px;
+            font-size: 0.875rem;
+            display: none;
+            margin-bottom: 0.5rem;
+            text-align: left;
+        }
+  </style>
+  <!-- Firebase SDKs (solo una vez, última versión) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="config.js"></script>
+  <!-- Agregar jQuery y Select2 JS -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+  <!-- QZ Tray: puente local para impresión ESC-POS (fuente nativa de la 3nStar RPT008) -->
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script>
+    // Inicializar Firebase solo una vez
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
+
+    let authResolved = false;
+
+    function mostrarLogin() {
+      document.getElementById('loginOverlay').style.display = 'flex';
+      document.getElementById('mainContainer').style.display = 'none';
+      setTimeout(() => {
+        const el = document.getElementById('loginEmail');
+        if (el) el.focus();
+      }, 100);
+    }
+
+    function mostrarPanel() {
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('mainContainer').style.display = '';
+    }
+
+    function iniciarSesion() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      const btn = document.getElementById('loginSubmitBtn');
+      const errorDiv = document.getElementById('loginError');
+
+      if (!email || !password) {
+        mostrarErrorLogin('Por favor completa todos los campos');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Iniciando sesión...';
+      errorDiv.style.display = 'none';
+
+      firebase.auth().signInWithEmailAndPassword(email, password)
+        .catch(error => {
+          btn.disabled = false;
+          btn.textContent = 'Iniciar Sesión';
+          let msg = 'Error al iniciar sesión';
+          if (['auth/user-not-found', 'auth/wrong-password', 'auth/invalid-credential'].includes(error.code)) {
+            msg = 'Correo o contraseña incorrectos';
+          } else if (error.code === 'auth/too-many-requests') {
+            msg = 'Demasiados intentos. Intenta más tarde';
+          } else if (error.code === 'auth/invalid-email') {
+            msg = 'Correo electrónico inválido';
+          }
+          mostrarErrorLogin(msg);
+        });
+    }
+
+    function mostrarErrorLogin(msg) {
+      const errorDiv = document.getElementById('loginError');
+      errorDiv.textContent = msg;
+      errorDiv.style.display = 'block';
+    }
+
+    // Timeout de seguridad: mostrar login si auth no resuelve en 5s
+    setTimeout(() => {
+      if (!authResolved) mostrarLogin();
+    }, 5000);
+
+    firebase.auth().onAuthStateChanged(function(user) {
+      authResolved = true;
+      if (user) {
+        mostrarPanel();
+      } else {
+        mostrarLogin();
+      }
+    });
+
+    // Soporte Enter en inputs del login
+    document.addEventListener('DOMContentLoaded', function() {
+      ['loginEmail', 'loginPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('keypress', e => { if (e.key === 'Enter') iniciarSesion(); });
+      });
+    });
+  </script>
+</head>
+<body>
+
+    <!-- Login Overlay -->
+    <div id="loginOverlay" class="login-overlay" style="display:none;">
+        <div class="login-card">
+            <img src="logo.png" alt="HomePoint Logo" class="login-logo">
+            <h1 class="login-title">Panel de Control</h1>
+            <p class="login-subtitle">Inicia sesión para continuar</p>
+            <div id="loginError" class="login-error"></div>
+            <div class="login-form">
+                <input type="email" id="loginEmail" class="login-input" placeholder="Correo electrónico" autocomplete="email">
+                <input type="password" id="loginPassword" class="login-input" placeholder="Contraseña" autocomplete="current-password">
+                <button id="loginSubmitBtn" class="login-btn" onclick="iniciarSesion()">Iniciar Sesión</button>
+            </div>
+        </div>
+    </div>
+
+  <main id="mainContainer" class="container" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+      <img src="logo.png" alt="Logo" style="width:300px;height:auto;display:block;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button type="button" id="whatsappModeBtn" class="secondary" style="display:inline-block;width:140px;text-align:center;padding:7px 18px;font-size:1rem;font-family:inherit;line-height:inherit;border:none;border-radius:6px;cursor:pointer;box-sizing:border-box;">Whatsapp</button>
+        <button type="button" id="adminModeBtn" class="secondary" style="display:inline-block;width:140px;text-align:center;padding:7px 18px;font-size:1rem;font-family:inherit;line-height:inherit;border:none;border-radius:6px;cursor:pointer;box-sizing:border-box;">Admin</button>
+        <a href="historialRecientes.html" id="historialBtn" class="secondary" style="display:inline-block;width:140px;text-align:center;box-sizing:border-box;text-decoration:none;padding:7px 18px;font-size:1rem;border:none;border-radius:6px;cursor:pointer;">Historial</a>
+        <a href="ingresoPedido.html" id="nuevoBtn" class="secondary" style="display:inline-block;width:140px;text-align:center;box-sizing:border-box;text-decoration:none;padding:7px 18px;font-size:1rem;border:none;border-radius:6px;cursor:pointer;">Nuevo</a>
+      </div>
+    </div>
+    <form id="orderForm" autocomplete="off">
+      <!-- Datos del Cliente -->
+      <section class="section" aria-labelledby="datos-cliente-title">
+        <h2 id="datos-cliente-title">Datos del Cliente</h2>
+        <div class="form-row">
+          <label for="nombre">Nombre</label>
+          <input type="text" id="nombre" name="nombre" maxlength="50" autocomplete="off" value="" style="width: 220px; display:inline-block; margin-right:10px;">
+          <button type="button" id="cargarClienteBtn" style="vertical-align:middle; padding:7px 14px; font-size:1rem; background:#28a745; color:#fff; border:none; border-radius:6px; cursor:pointer; margin-right:6px;">Cargar</button>
+          <button type="button" id="editarClienteBtn" style="vertical-align:middle; padding:7px 18px; font-size:1rem; background:#6c4eb6; color:#fff; border:none; border-radius:6px; cursor:pointer;">Editar Cliente</button>
+        </div>
+        <div class="form-row">
+          <label for="direccion">Info</label>
+          <input type="text" id="direccion" name="direccion" maxlength="100" autocomplete="street-address">
+        </div>
+        <div style="margin-left:140px; margin-bottom:0.75rem;">
+          <button type="button" id="toggleExtraClienteBtn" style="background:none;border:none;color:#6c4eb6;cursor:pointer;font-size:0.85rem;font-family:inherit;padding:0;display:flex;align-items:center;gap:4px;">
+            <span id="toggleExtraClienteArrow" style="font-size:0.75rem;">▶</span>
+            <span id="toggleExtraClienteLabel">Ver más datos</span>
+          </button>
+        </div>
+        <div id="extraClienteFields" style="display:none;">
+          <div class="form-row">
+            <label for="telefono">Teléfono</label>
+            <input type="tel" id="telefono" name="telefono" maxlength="20" inputmode="tel" autocomplete="tel">
+          </div>
+          <div class="form-row">
+            <label for="dni">DNI</label>
+            <input type="text" id="dni" name="dni" maxlength="15" pattern="^\d{7,15}$" autocomplete="off">
+          </div>
+          <div class="form-row">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" maxlength="50" autocomplete="email">
+          </div>
+        </div>
+      </section>
+
+      <!-- Artículos -->
+      <section class="section" aria-labelledby="articulos-title">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2 id="articulos-title" style="margin: 0;">Artículos</h2>
+          <div style="display: flex; gap: 20px; align-items: center;">
+            <div id="cotizacionDolar" style="font-size: 0.9rem; color: #666; font-weight: 500;">
+              Cotización Dólar: <span id="cotizacionValor">Cargando...</span>
+            </div>
+            <div id="difUSD" style="font-size: 0.9rem; color: #666; font-weight: 500;">
+              Dif%USD: <span id="difUSDValor">Cargando...</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Buscador de Artículos -->
+        <div id="searchArticulosContainer" style="margin-bottom: 1.5rem; padding: 24px; background: #f8f9fa; border: 2px solid #6c4eb6; border-radius: 8px; max-width: 100%;">
+          <div style="display: grid; grid-template-columns: auto 1fr auto auto auto auto; gap: 12px; align-items: center; width: 100%;">
+            <label for="searchInput" style="font-weight: 600; color: #495057; white-space: nowrap;">
+              Buscar:
+            </label>
+            <div style="position: relative; min-width: 0;">
+              <input
+                type="text"
+                id="searchInput"
+                placeholder="Escanee o ingrese el código de barras..."
+                autocomplete="off"
+                style="width: 100%; padding: 10px 14px; border: 2px solid #6c4eb6; border-radius: 6px; font-size: 0.95rem; background: white; box-sizing: border-box;"
+              />
+              <div id="searchResults" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 2px solid #6c4eb6; border-top: none; border-radius: 0 0 6px 6px; max-height: 400px; overflow-y: auto; z-index: 1000; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"></div>
+            </div>
+            <label for="searchQuantity" style="font-weight: 600; color: #495057; white-space: nowrap;">
+              Cantidad
+            </label>
+            <input
+              type="number"
+              id="searchQuantity"
+              min="1"
+              max="999"
+              value="1"
+              placeholder="1"
+              style="width: 80px; padding: 10px 12px; border: 2px solid #28a745; border-radius: 6px; font-size: 0.95rem; background: white; text-align: center; box-sizing: border-box;"
+            />
+            <button
+              type="button"
+              id="addSearchItemBtn"
+              title="Agregar artículo"
+              aria-label="Agregar artículo"
+              style="padding: 10px 18px; background: #28a745; color: white; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; white-space: nowrap; font-size: 1.4rem; line-height: 1;"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              id="manualSearchBtn"
+              title="Habilitar búsqueda manual por nombre"
+              aria-label="Búsqueda manual"
+              style="display: inline-flex; align-items: center; justify-content: center; padding: 10px 14px; background: #fff; color: #6c4eb6; border: 2px solid #6c4eb6; border-radius: 6px; font-size: 1.1rem; font-weight: 600; cursor: pointer; white-space: nowrap; font-family: inherit;"
+            >
+              <span id="manualSearchIcon">🔒</span>
+              <span id="manualSearchLabel" style="display: none;"></span>
+            </button>
+          </div>
+        </div>
+        <table class="items-table" aria-label="Artículos de la Orden">
+          <thead>
+            <tr>
+              <th>Img</th>
+              <th>Código</th>
+              <th>Artículo</th>
+              <th>Cantidad</th>
+              <th>Valor u</th>
+              <th>Valor Total</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody">
+            <!-- Filas dinámicas -->
+          </tbody>
+        </table>
+        <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 1rem;">
+          <div id="contadoresArticulos" style="display: none; font-size: 0.9rem; color: #666; font-weight: 500; gap: 20px; align-items: center;">
+            <span id="cantidadArticulos">Artículos distintos: 0</span>
+            <span id="cantidadUnidades">Unidades totales: 0</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pagos -->
+      <section class="section" aria-labelledby="pagos-title">
+        <h2 id="pagos-title">Pagos</h2>
+        <div class="form-row">
+          <label for="subtotal">Subtotal</label>
+          <input type="text" id="subtotal" name="subtotal" readonly>
+        </div>
+        <div class="form-row">
+          <label for="medioPago">Medio de Pago*</label>
+          <select id="medioPago" name="medioPago">
+            <option value="">Seleccione</option>
+            <option value="Efectivo">Efectivo</option>
+            <!-- <option value="MercadoPago">MercadoPago</option> -->
+            <option value="Transferencia">Transferencia</option>
+            <option value="Debito">Débito</option>
+            <option value="Credito">Crédito</option>
+            <option value="Parcial">Parcial</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="recargo">Recargo</label>
+          <div style="display:flex;align-items:center;gap:6px;width:100%;">
+            <input type="text" id="recargoPorcentaje" name="recargoPorcentaje" inputmode="numeric" pattern="[0-9.]*" placeholder="%" style="max-width:50px;text-align:right;">
+            <input type="text" id="recargo" name="recargo" inputmode="numeric" pattern="[0-9.]*" value="0" style="flex:1 1 0%;min-width:0;width:100%;">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="descuento">Descuento</label>
+          <div style="display:flex;align-items:center;gap:6px;width:100%;">
+            <input type="text" id="descuentoPorcentaje" name="descuentoPorcentaje" inputmode="numeric" pattern="[0-9.]*" placeholder="%" style="max-width:50px;text-align:right;">
+            <input type="text" id="descuento" name="descuento" inputmode="numeric" pattern="[0-9.]*" value="0" style="flex:1 1 0%;min-width:0;width:100%;">
+          </div>
+        </div>
+        <div class="form-row" style="display:none;">
+          <label for="envio">Costo de Envío</label>
+          <input type="text" id="envio" name="envio" inputmode="numeric" pattern="[0-9.]*" value="0">
+        </div>
+        <div class="form-row">
+          <label for="totalFinal"><strong>Total Final</strong></label>
+          <input type="text" id="totalFinal" name="totalFinal" readonly>
+        </div>
+      </section>
+
+      <!-- Acciones y Nota -->
+      <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-top: 1.5rem;">
+        <div style="flex: 1; max-width: 600px; display: flex; flex-direction: column;">
+          <div class="form-row">
+            <label for="nota">Nota</label>
+            <input type="text" id="nota" name="nota" maxlength="200" style="width:100%;"></input>
+          </div>
+          <div class="form-row">
+            <label for="vendedor">Vendedor</label>
+            <select id="vendedor" name="vendedor" style="width:100%;">
+              <option value="">Seleccione</option>
+              <option value="Hora">Hora</option>
+              <option value="Sabri">Sabri</option>
+              <option value="Javi">Javi</option>
+              <option value="Ale">Ale</option>
+              <option value="Leo">Leo</option>
+              <option value="User1">User1</option>
+              <option value="User2">User2</option>
+              <option value="WhatsApp">WhatsApp</option>
+            </select>
+          </div>
+          <div class="form-row" id="aliasRow" style="display: none;">
+            <label for="alias">ALIAS</label>
+            <input type="text" id="alias" name="alias" maxlength="50" style="width:100%; text-transform: uppercase;">
+          </div>
+        </div>
+        <div class="actions" style="margin-left: 24px; display: flex; gap: 10px; align-items: center;">
+          <button type="button" id="calcCobroBtn" title="Calculadora de cobro" style="padding: 10px 14px; background: #6c4eb6; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;" onmouseover="this.style.background='#5a3da0'" onmouseout="this.style.background='#6c4eb6'">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" viewBox="0 0 16 16">
+              <path d="M12 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h8zM4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H4z"/>
+              <path d="M4 2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-2zm0 4a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm3-6a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm3-6a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-4z"/>
+            </svg>
+          </button>
+          <button type="submit" class="primary">Ingresar Orden</button>
+          <button type="button" class="secondary" style="display:none;">Imprimir</button>
+        </div>
+      </div>
+    </form>
+    <div id="message" role="alert" aria-live="polite"></div>
+
+    <!-- Modal Calculadora de Cobro -->
+    <div id="calcCobroOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:10000; align-items:center; justify-content:center;">
+      <div id="calcCobroModal" style="background:#fff; border-radius:16px; padding:2rem; width:100%; max-width:380px; box-shadow:0 20px 40px rgba(0,0,0,0.2); animation:fadeInUp 0.25s ease forwards;">
+        <h3 style="margin:0 0 1.2rem 0; font-size:1.2rem; color:#1e293b; text-align:center; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#6c4eb6" viewBox="0 0 16 16">
+            <path d="M12 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h8zM4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H4z"/>
+            <path d="M4 2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-2zm0 4a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm3-6a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm3-6a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1zm0 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-4z"/>
+          </svg>
+          Calculadora de Cobro
+        </h3>
+        <div style="background:#f1edf8; border-radius:10px; padding:1rem; margin-bottom:1.2rem; text-align:center;">
+          <div style="font-size:0.85rem; color:#6c757d; margin-bottom:4px;">Total a cobrar</div>
+          <div id="calcTotal" style="font-size:1.8rem; font-weight:700; color:#6c4eb6;">$0</div>
+        </div>
+        <div style="margin-bottom:1rem;">
+          <label for="calcAbona" style="font-size:0.9rem; font-weight:600; color:#495057; display:block; margin-bottom:6px;">Abona el cliente</label>
+          <input type="text" id="calcAbona" inputmode="numeric" placeholder="Ingrese monto..." style="width:100%; padding:12px 14px; border:2px solid #e2e8f0; border-radius:10px; font-size:1.1rem; box-sizing:border-box; transition:border-color 0.2s;" onfocus="this.style.borderColor='#6c4eb6'" onblur="this.style.borderColor='#e2e8f0'">
+        </div>
+        <div id="calcVueltoContainer" style="background:#e8f5e9; border-radius:10px; padding:1rem; text-align:center; display:none;">
+          <div style="font-size:0.85rem; color:#6c757d; margin-bottom:4px;">Vuelto</div>
+          <div id="calcVuelto" style="font-size:1.6rem; font-weight:700; color:#2e7d32;">$0</div>
+        </div>
+        <div id="calcFaltaContainer" style="background:#fef2f2; border-radius:10px; padding:1rem; text-align:center; display:none;">
+          <div style="font-size:0.85rem; color:#6c757d; margin-bottom:4px;">Falta</div>
+          <div id="calcFalta" style="font-size:1.6rem; font-weight:700; color:#dc2626;">$0</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function() {
+      const overlay = document.getElementById('calcCobroOverlay');
+      const modal = document.getElementById('calcCobroModal');
+      const abonaInput = document.getElementById('calcAbona');
+      const vueltoContainer = document.getElementById('calcVueltoContainer');
+      const faltaContainer = document.getElementById('calcFaltaContainer');
+      const vueltoEl = document.getElementById('calcVuelto');
+      const faltaEl = document.getElementById('calcFalta');
+      const totalEl = document.getElementById('calcTotal');
+
+      function parseNumber(str) {
+        if (!str) return 0;
+        return parseInt(str.replace(/\D/g, ''), 10) || 0;
+      }
+
+      function formatNumber(n) {
+        return '$' + Math.round(n).toLocaleString('es-AR').replace(/,/g, '.');
+      }
+
+      function formatInputMiles(input) {
+        const num = parseNumber(input.value);
+        if (num > 0) {
+          const pos = input.selectionStart;
+          const lenAntes = input.value.length;
+          input.value = '$' + num.toLocaleString('es-AR').replace(/,/g, '.');
+          const lenDespues = input.value.length;
+          input.setSelectionRange(pos + (lenDespues - lenAntes), pos + (lenDespues - lenAntes));
+        } else {
+          input.value = '';
+        }
+      }
+
+      function abrirCalcCobro() {
+        const totalFinal = parseNumber(document.getElementById('totalFinal').value);
+        totalEl.textContent = formatNumber(totalFinal);
+        abonaInput.value = '';
+        vueltoContainer.style.display = 'none';
+        faltaContainer.style.display = 'none';
+        overlay.style.display = 'flex';
+        setTimeout(() => abonaInput.focus(), 100);
+      }
+
+      function cerrarCalcCobro() {
+        overlay.style.display = 'none';
+      }
+
+      function calcularVuelto() {
+        const totalFinal = parseNumber(document.getElementById('totalFinal').value);
+        formatInputMiles(abonaInput);
+        const abona = parseNumber(abonaInput.value);
+        if (!abona) {
+          vueltoContainer.style.display = 'none';
+          faltaContainer.style.display = 'none';
+          return;
+        }
+        const diff = abona - totalFinal;
+        if (diff >= 0) {
+          vueltoEl.textContent = formatNumber(diff);
+          vueltoContainer.style.display = 'block';
+          faltaContainer.style.display = 'none';
+        } else {
+          faltaEl.textContent = formatNumber(Math.abs(diff));
+          faltaContainer.style.display = 'block';
+          vueltoContainer.style.display = 'none';
+        }
+      }
+
+      document.getElementById('calcCobroBtn').addEventListener('click', abrirCalcCobro);
+
+      overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) cerrarCalcCobro();
+      });
+
+      abonaInput.addEventListener('input', calcularVuelto);
+
+      abonaInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') cerrarCalcCobro();
+      });
+    })();
+    </script>
+
+  </main>
+  <!-- Modal contraseña Admin -->
+  <div id="adminPassOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:10000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:16px; padding:2rem; width:100%; max-width:340px; box-shadow:0 20px 40px rgba(0,0,0,0.2); animation:fadeInUp 0.25s ease forwards;">
+      <h3 id="adminPassTitle" style="margin:0 0 1.2rem 0; font-size:1.1rem; color:#1e293b; text-align:center;">Acceso Administrador</h3>
+      <div id="adminPassError" style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#dc2626; padding:0.6rem 0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.8rem;">Contraseña incorrecta</div>
+      <input type="password" id="adminPassInput" placeholder="Contraseña" style="width:100%; padding:10px 14px; border:2px solid #e2e8f0; border-radius:10px; font-size:1rem; box-sizing:border-box; transition:border-color 0.2s;" onfocus="this.style.borderColor='#6c4eb6'" onblur="this.style.borderColor='#e2e8f0'">
+      <div style="display:flex; gap:8px; margin-top:1rem;">
+        <button type="button" id="adminPassCancelBtn" style="flex:1; padding:10px; border:2px solid #e2e8f0; background:#fff; border-radius:10px; font-size:0.95rem; cursor:pointer;">Cancelar</button>
+        <button type="button" id="adminPassConfirmBtn" style="flex:1; padding:10px; background:#6c4eb6; color:#fff; border:none; border-radius:10px; font-size:0.95rem; font-weight:600; cursor:pointer;">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal contraseña Búsqueda Manual -->
+  <div id="manualPassOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:10000; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:16px; padding:2rem; width:100%; max-width:340px; box-shadow:0 20px 40px rgba(0,0,0,0.2); animation:fadeInUp 0.25s ease forwards;">
+      <h3 style="margin:0 0 0.4rem 0; font-size:1.1rem; color:#1e293b; text-align:center;">Búsqueda Manual</h3>
+      <p style="margin:0 0 1.2rem 0; font-size:0.85rem; color:#64748b; text-align:center;">Ingrese la contraseña para buscar por nombre sin usar el código de barras.</p>
+      <div id="manualPassError" style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#dc2626; padding:0.6rem 0.75rem; border-radius:8px; font-size:0.85rem; margin-bottom:0.8rem;">Contraseña incorrecta</div>
+      <input type="password" id="manualPassInput" placeholder="Contraseña" style="width:100%; padding:10px 14px; border:2px solid #e2e8f0; border-radius:10px; font-size:1rem; box-sizing:border-box; transition:border-color 0.2s;" onfocus="this.style.borderColor='#6c4eb6'" onblur="this.style.borderColor='#e2e8f0'">
+      <div style="display:flex; gap:8px; margin-top:1rem;">
+        <button type="button" id="manualPassCancelBtn" style="flex:1; padding:10px; border:2px solid #e2e8f0; background:#fff; border-radius:10px; font-size:0.95rem; cursor:pointer;">Cancelar</button>
+        <button type="button" id="manualPassConfirmBtn" style="flex:1; padding:10px; background:#6c4eb6; color:#fff; border:none; border-radius:10px; font-size:0.95rem; font-weight:600; cursor:pointer;">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="ingresoPedido.js"></script>
+</body>
+</html>

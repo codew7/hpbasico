@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caja - Distribuidora HomePoint</title>
+    <link rel="icon" href="faviconnegro.png" type="image/png">
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #16161f;
+            --bg-card-hover: #1c1c28;
+            --bg-elevated: #1e1e2a;
+            --border-subtle: rgba(255, 255, 255, 0.06);
+            --border-active: rgba(255, 255, 255, 0.12);
+            --text-primary: #e8e8ed;
+            --text-secondary: #8888a0;
+            --text-muted: #55556a;
+            --accent-green: #00e59b;
+            --accent-green-dim: rgba(0, 229, 155, 0.12);
+            --accent-blue: #4d8eff;
+            --accent-blue-dim: rgba(77, 142, 255, 0.12);
+            --accent-amber: #ffb84d;
+            --accent-amber-dim: rgba(255, 184, 77, 0.12);
+            --accent-purple: #a37dff;
+            --accent-purple-dim: rgba(163, 125, 255, 0.12);
+            --accent-rose: #ff6b8a;
+            --accent-rose-dim: rgba(255, 107, 138, 0.12);
+            --accent-cyan: #2dd4d4;
+            --accent-cyan-dim: rgba(45, 212, 212, 0.12);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --shadow-card: 0 1px 3px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
+            --shadow-glow-green: 0 0 30px rgba(0, 229, 155, 0.08);
+            --transition-base: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Noise texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .app-shell {
+            position: relative;
+            z-index: 1;
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 20px 16px 40px;
+        }
+
+        /* ─── Header ─── */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0 28px;
+        }
+
+        .top-bar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, var(--accent-green), #00b87a);
+            display: grid;
+            place-items: center;
+            font-size: 18px;
+            color: var(--bg-primary);
+            font-weight: 700;
+        }
+
+        .brand-text {
+            font-size: 1.05rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: var(--text-primary);
+        }
+
+        .brand-sub {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 400;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .top-bar-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            background: var(--bg-card);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* ─── Date Picker Section ─── */
+        .date-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-card);
+        }
+
+        .date-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .date-label {
+            font-size: 0.78rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            white-space: nowrap;
+        }
+
+        .date-input-wrap {
+            flex: 1;
+            position: relative;
+        }
+
+        .date-input {
+            width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-active);
+            border-radius: var(--radius-sm);
+            padding: 10px 14px;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+            outline: none;
+            transition: border-color var(--transition-base);
+            -webkit-appearance: none;
+        }
+
+        .date-input:focus {
+            border-color: var(--accent-green);
+            box-shadow: 0 0 0 3px var(--accent-green-dim);
+        }
+
+        .date-input::-webkit-calendar-picker-indicator {
+            filter: invert(1) brightness(0.7);
+            cursor: pointer;
+        }
+
+        .date-nav {
+            display: flex;
+            gap: 4px;
+        }
+
+        .date-nav-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 1rem;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            transition: all var(--transition-base);
+        }
+
+        .date-nav-btn:hover {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border-color: var(--border-active);
+        }
+
+        .btn-hoy {
+            width: auto;
+            padding: 0 14px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        /* ─── Loading ─── */
+        .loading-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 80px 20px;
+            gap: 16px;
+        }
+
+        .loader-ring {
+            width: 36px;
+            height: 36px;
+            border: 2.5px solid var(--border-subtle);
+            border-top-color: var(--accent-green);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-text {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* ─── Total Hero Card ─── */
+        .hero-total {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-xl);
+            padding: 28px 24px;
+            margin-bottom: 16px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow-card), var(--shadow-glow-green);
+        }
+
+        .hero-total::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent-green), transparent);
+        }
+
+        .hero-label {
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 8px;
+        }
+
+        .hero-amount {
+            font-family: 'DM Mono', monospace;
+            font-size: 2.8rem;
+            font-weight: 500;
+            color: var(--accent-green);
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            margin-bottom: 10px;
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        /* ─── Ganancia Reveal ─── */
+        .ganancia-reveal {
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.4s ease 0.05s;
+        }
+
+        .ganancia-reveal.visible {
+            max-height: 120px;
+            opacity: 1;
+        }
+
+        .ganancia-inner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 10px 0 6px;
+            transform: translateY(-8px);
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .ganancia-reveal.visible .ganancia-inner {
+            transform: translateY(0);
+        }
+
+        .ganancia-label {
+            font-size: 0.7rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .ganancia-amount {
+            font-family: 'DM Mono', monospace;
+            font-size: 1.3rem;
+            font-weight: 500;
+            color: var(--accent-amber);
+            letter-spacing: -0.01em;
+        }
+
+        .ganancia-percent {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--bg-primary);
+            background: var(--accent-amber);
+            padding: 2px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.02em;
+        }
+
+        .hero-meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+        }
+
+        .hero-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .hero-meta-item i {
+            font-size: 0.85rem;
+            opacity: 0.6;
+        }
+
+        /* ─── Payment Method Cards ─── */
+        .methods-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .method-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all var(--transition-base);
+            box-shadow: var(--shadow-card);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .method-card::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            border-radius: 0 2px 2px 0;
+            transition: width var(--transition-base);
+        }
+
+        .method-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-active);
+        }
+
+        .method-card.efectivo::before { background: var(--accent-green); }
+        .method-card.transferencia::before { background: var(--accent-blue); }
+        .method-card.debito::before { background: var(--accent-rose); }
+        .method-card.credito::before { background: var(--accent-cyan); }
+        .method-card.mercadopago::before { background: var(--accent-amber); }
+        .method-card.parcial::before { background: var(--accent-purple); }
+
+        .method-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: var(--radius-sm);
+            display: grid;
+            place-items: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+
+        .efectivo .method-icon {
+            background: var(--accent-green-dim);
+            color: var(--accent-green);
+        }
+        .transferencia .method-icon {
+            background: var(--accent-blue-dim);
+            color: var(--accent-blue);
+        }
+        .debito .method-icon {
+            background: var(--accent-rose-dim);
+            color: var(--accent-rose);
+        }
+        .credito .method-icon {
+            background: var(--accent-cyan-dim);
+            color: var(--accent-cyan);
+        }
+        .mercadopago .method-icon {
+            background: var(--accent-amber-dim);
+            color: var(--accent-amber);
+        }
+        .parcial .method-icon {
+            background: var(--accent-purple-dim);
+            color: var(--accent-purple);
+        }
+
+        .method-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .method-name {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+
+        .method-count {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .method-amount {
+            font-family: 'DM Mono', monospace;
+            font-size: 1.15rem;
+            font-weight: 500;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .efectivo .method-amount { color: var(--accent-green); }
+        .transferencia .method-amount { color: var(--accent-blue); }
+        .debito .method-amount { color: var(--accent-rose); }
+        .credito .method-amount { color: var(--accent-cyan); }
+        .mercadopago .method-amount { color: var(--accent-amber); }
+        .parcial .method-amount { color: var(--accent-purple); }
+
+        /* Clickable transferencia */
+        .method-card.transferencia {
+            cursor: pointer;
+        }
+
+        .method-card.transferencia:hover {
+            transform: translateY(-1px);
+        }
+
+        .method-expand-icon {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            transition: transform var(--transition-base);
+            flex-shrink: 0;
+        }
+
+        .method-expand-icon.expanded {
+            transform: rotate(180deg);
+        }
+
+        /* ─── Alias Breakdown ─── */
+        .alias-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.3s ease;
+            opacity: 0;
+        }
+
+        .alias-panel.open {
+            opacity: 1;
+            max-height: 600px;
+        }
+
+        /* Agrupa la tarjeta Transferencia con su panel de alias para que
+           el desglose quede justo debajo, como un solo item del grid */
+        .transf-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .alias-list {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 6px;
+            margin-top: 10px;
+            margin-bottom: 4px;
+        }
+
+        .alias-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
+            transition: background var(--transition-base);
+        }
+
+        .alias-item:hover {
+            background: var(--bg-card);
+        }
+
+        .alias-item + .alias-item {
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .alias-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .alias-badge {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: var(--accent-blue-dim);
+            display: grid;
+            place-items: center;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+
+        .alias-name {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            font-weight: 400;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .alias-name-sub {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .alias-amount {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: var(--accent-blue);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* ─── Orders list ─── */
+        .orders-section {
+            margin-top: 20px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 4px;
+            margin-bottom: 12px;
+        }
+
+        .section-title {
+            font-size: 0.78rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .orders-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .order-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 12px;
+            align-items: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            transition: background var(--transition-base);
+        }
+
+        .order-row:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .order-client {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .order-method-badge {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.65rem;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+        }
+
+        .order-method-badge.efectivo {
+            background: var(--accent-green-dim);
+            color: var(--accent-green);
+        }
+        .order-method-badge.transferencia {
+            background: var(--accent-blue-dim);
+            color: var(--accent-blue);
+        }
+        .order-method-badge.debito {
+            background: var(--accent-rose-dim);
+            color: var(--accent-rose);
+        }
+        .order-method-badge.credito {
+            background: var(--accent-cyan-dim);
+            color: var(--accent-cyan);
+        }
+        .order-method-badge.mercadopago {
+            background: var(--accent-amber-dim);
+            color: var(--accent-amber);
+        }
+        .order-method-badge.parcial {
+            background: var(--accent-purple-dim);
+            color: var(--accent-purple);
+        }
+
+        .order-total {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            white-space: nowrap;
+        }
+
+        /* ─── Empty state ─── */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .empty-icon {
+            font-size: 2.5rem;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        .empty-text {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* ─── Animations ─── */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-in {
+            animation: fadeUp 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            opacity: 0;
+        }
+
+        .delay-1 { animation-delay: 0.05s; }
+        .delay-2 { animation-delay: 0.1s; }
+        .delay-3 { animation-delay: 0.15s; }
+        .delay-4 { animation-delay: 0.2s; }
+        .delay-5 { animation-delay: 0.25s; }
+        .delay-6 { animation-delay: 0.3s; }
+        .delay-7 { animation-delay: 0.35s; }
+
+        /* ─── Toast ─── */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(60px);
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border: 1px solid var(--border-active);
+            padding: 10px 20px;
+            border-radius: var(--radius-md);
+            font-size: 0.82rem;
+            font-weight: 500;
+            z-index: 999;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* ─── Percentage bar ─── */
+        .percent-bar-wrap {
+            margin-top: 14px;
+            padding: 0 4px;
+        }
+
+        .percent-bar {
+            height: 6px;
+            border-radius: 3px;
+            background: var(--bg-secondary);
+            display: flex;
+            overflow: hidden;
+            gap: 2px;
+        }
+
+        .percent-segment {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .percent-segment.efectivo { background: var(--accent-green); }
+        .percent-segment.transferencia { background: var(--accent-blue); }
+        .percent-segment.debito { background: var(--accent-rose); }
+        .percent-segment.credito { background: var(--accent-cyan); }
+        .percent-segment.mercadopago { background: var(--accent-amber); }
+        .percent-segment.parcial { background: var(--accent-purple); }
+
+        .percent-labels {
+            display: flex;
+            justify-content: center;
+            gap: 14px;
+            margin-top: 8px;
+        }
+
+        .percent-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .percent-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .percent-dot.efectivo { background: var(--accent-green); }
+        .percent-dot.transferencia { background: var(--accent-blue); }
+        .percent-dot.debito { background: var(--accent-rose); }
+        .percent-dot.credito { background: var(--accent-cyan); }
+        .percent-dot.mercadopago { background: var(--accent-amber); }
+        .percent-dot.parcial { background: var(--accent-purple); }
+
+        /* ─── Responsive ─── */
+        @media (max-width: 480px) {
+            .app-shell { padding: 12px 10px 30px; }
+            .hero-amount { font-size: 2.2rem; }
+            .method-card { padding: 14px 16px; gap: 12px; }
+            .method-icon { width: 36px; height: 36px; font-size: 1rem; }
+            .method-amount { font-size: 1rem; }
+            .order-row { grid-template-columns: 1fr auto auto; gap: 8px; padding: 10px 12px; }
+            .hero-meta { gap: 10px; font-size: 0.72rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <div class="top-bar-brand">
+                <div class="brand-icon"><i class="bi bi-cash-stack"></i></div>
+                <div>
+                    <div class="brand-text">HomePoint</div>
+                    <div class="brand-sub">Caja del Dia</div>
+                </div>
+            </div>
+            <div class="top-bar-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Conectando...</span>
+            </div>
+        </div>
+
+        <!-- Date Selector -->
+        <div class="date-section">
+            <div class="date-row">
+                <span class="date-label">Fecha</span>
+                <div class="date-input-wrap">
+                    <input type="date" class="date-input" id="dateInput">
+                </div>
+                <div class="date-nav">
+                    <button class="date-nav-btn" id="btnPrev" title="Dia anterior"><i class="bi bi-chevron-left"></i></button>
+                    <button class="date-nav-btn" id="btnNext" title="Dia siguiente"><i class="bi bi-chevron-right"></i></button>
+                    <button class="date-nav-btn btn-hoy" id="btnHoy">Hoy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div id="loadingState" class="loading-state">
+            <div class="loader-ring"></div>
+            <span class="loading-text">Cargando datos...</span>
+        </div>
+
+        <!-- Content (hidden until loaded) -->
+        <div id="mainContent" style="display:none;">
+
+            <!-- Hero Total -->
+            <div class="hero-total animate-in delay-1" id="heroCard">
+                <div class="hero-label">Total Facturado</div>
+                <div class="hero-amount" id="heroAmount" title="Doble clic para ver ganancia">$0</div>
+                <!-- Ganancia oculta - doble clic para revelar -->
+                <div class="ganancia-reveal" id="gananciaReveal">
+                    <div class="ganancia-inner">
+                        <div class="ganancia-label">Ganancia Bruta</div>
+                        <div class="ganancia-amount" id="gananciaAmount">$0</div>
+                        <div class="ganancia-percent" id="gananciaPercent">0%</div>
+                    </div>
+                </div>
+                <div class="hero-meta">
+                    <span class="hero-meta-item"><i class="bi bi-receipt"></i> <span id="heroOrders">0</span> pedidos</span>
+                    <span class="hero-meta-item"><i class="bi bi-calendar3"></i> <span id="heroDate">-</span></span>
+                </div>
+
+                <!-- Percent bar -->
+                <div class="percent-bar-wrap">
+                    <div class="percent-bar" id="percentBar"></div>
+                    <div class="percent-labels" id="percentLabels"></div>
+                </div>
+            </div>
+
+            <!-- Payment Method Cards (el desglose de alias se inyecta debajo de la tarjeta Transferencia) -->
+            <div class="methods-grid" id="methodsGrid"></div>
+
+            <!-- Orders list -->
+            <div class="orders-section" id="ordersSection">
+                <div class="section-header">
+                    <span class="section-title">Detalle de pedidos</span>
+                    <span class="section-title" id="ordersCount"></span>
+                </div>
+                <div class="orders-list" id="ordersList"></div>
+            </div>
+
+            <!-- Empty state -->
+            <div id="emptyState" class="empty-state" style="display:none;">
+                <div class="empty-icon"><i class="bi bi-inbox"></i></div>
+                <div class="empty-text">No hay pedidos para esta fecha</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="config.js"></script>
+    <script>
+        // Firebase init
+        firebase.initializeApp(firebaseConfig);
+
+        const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwzs8fJtVLkdUjOwx76miDSku6m-tVp371iqfxjepxgWydumKKHhd7w0zLHTMZxDo95Cw/exec';
+
+        // State
+        let pedidosCache = null;
+        let aliasExpanded = false;
+        let gananciaVisible = false;
+
+        // DOM refs
+        const dateInput = document.getElementById('dateInput');
+        const loadingState = document.getElementById('loadingState');
+        const mainContent = document.getElementById('mainContent');
+        const emptyState = document.getElementById('emptyState');
+        const heroAmount = document.getElementById('heroAmount');
+        const heroOrders = document.getElementById('heroOrders');
+        const heroDate = document.getElementById('heroDate');
+        const methodsGrid = document.getElementById('methodsGrid');
+        const ordersList = document.getElementById('ordersList');
+        const ordersCount = document.getElementById('ordersCount');
+        const percentBar = document.getElementById('percentBar');
+        const percentLabels = document.getElementById('percentLabels');
+        const ordersSection = document.getElementById('ordersSection');
+        const heroCard = document.getElementById('heroCard');
+        const gananciaReveal = document.getElementById('gananciaReveal');
+        const gananciaAmount = document.getElementById('gananciaAmount');
+        const gananciaPercent = document.getElementById('gananciaPercent');
+
+        // Auth check
+        firebase.auth().onAuthStateChanged(user => {
+            if (user) {
+                init();
+            } else {
+                window.location.href = 'login.html';
+            }
+        });
+
+        function init() {
+            // Set today
+            dateInput.value = toLocalDateString(new Date());
+
+            // Events
+            dateInput.addEventListener('change', () => procesarFecha());
+            document.getElementById('btnPrev').addEventListener('click', () => cambiarDia(-1));
+            document.getElementById('btnNext').addEventListener('click', () => cambiarDia(1));
+            document.getElementById('btnHoy').addEventListener('click', () => {
+                dateInput.value = toLocalDateString(new Date());
+                procesarFecha();
+            });
+
+            // Doble clic en total para revelar/ocultar ganancia
+            heroAmount.addEventListener('dblclick', toggleGanancia);
+
+            // Fetch data
+            fetchData();
+        }
+
+        function toLocalDateString(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function cambiarDia(delta) {
+            const parts = dateInput.value.split('-');
+            const current = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+            current.setDate(current.getDate() + delta);
+            dateInput.value = toLocalDateString(current);
+            procesarFecha();
+        }
+
+        async function fetchData() {
+            setStatus('Descargando...', false);
+            try {
+                if (!pedidosCache) {
+                    const res = await fetch(APPS_SCRIPT_URL);
+                    if (!res.ok) throw new Error('Error de red');
+                    const data = await res.json();
+                    pedidosCache = data.pedidos || data;
+                }
+                setStatus('En linea', true);
+                procesarFecha();
+            } catch (err) {
+                console.error('Error fetching data:', err);
+                setStatus('Error', false);
+                showToast('Error al cargar datos');
+                loadingState.style.display = 'none';
+            }
+        }
+
+        function setStatus(text, ok) {
+            document.getElementById('statusText').textContent = text;
+            document.getElementById('statusDot').style.background = ok ? 'var(--accent-green)' : 'var(--accent-rose)';
+        }
+
+        function procesarFecha() {
+            if (!pedidosCache) return;
+
+            const fechaSel = dateInput.value; // YYYY-MM-DD
+            // No se reinicia aliasExpanded: el estado expandido/contraido
+            // del desglose de transferencias persiste al cambiar de fecha
+
+            // Filter orders for selected date
+            const pedidosDia = [];
+
+            Object.entries(pedidosCache).forEach(([id, pedido]) => {
+                if (!pedido.fecha) return;
+                if (pedido.status !== 'DESPACHADO/ENTREGADO') return;
+                // Solo procesar pedidos creados por admin (venta local/mostrador)
+                const createdby = pedido.createdby || pedido.createdBy || '';
+                if (createdby.toLowerCase() !== 'admin') return;
+
+                if (pedido.cliente?.tipoCliente?.toLowerCase() === 'admin') return;
+
+                // Compare date
+                const fp = new Date(pedido.fecha);
+                const fechaPedido = toLocalDateString(fp);
+                if (fechaPedido !== fechaSel) return;
+
+                pedidosDia.push({
+                    id,
+                    cliente: pedido.cliente?.nombre || 'Sin nombre',
+                    medioPago: (pedido.pagos?.medioPago || 'Efectivo').toLowerCase(),
+                    total: pedido.pagos?.totalFinal || 0,
+                    ganancia: pedido.pagos?.ganancia || 0,
+                    alias: pedido.pagos?.alias || null
+                });
+            });
+
+            renderContent(pedidosDia, fechaSel);
+        }
+
+        function normalizarMedioPago(mp) {
+            const lower = mp.toLowerCase();
+            if (lower === 'efectivo') return 'efectivo';
+            if (lower === 'transferencia') return 'transferencia';
+            if (lower === 'mercadopago' || lower === 'mercado pago') return 'mercadopago';
+            if (lower === 'debito' || lower === 'débito') return 'debito';
+            if (lower === 'credito' || lower === 'crédito') return 'credito';
+            return 'parcial';
+        }
+
+        function renderContent(pedidos, fechaSel) {
+            loadingState.style.display = 'none';
+            mainContent.style.display = 'block';
+
+            if (pedidos.length === 0) {
+                heroCard.style.display = 'none';
+                methodsGrid.innerHTML = '';
+                ordersList.innerHTML = '';
+                ordersSection.style.display = 'none';
+                emptyState.style.display = 'block';
+                return;
+            }
+
+            heroCard.style.display = '';
+            emptyState.style.display = 'none';
+            ordersSection.style.display = '';
+
+            // Aggregate by method
+            const metodos = { efectivo: { total: 0, count: 0 }, transferencia: { total: 0, count: 0 }, debito: { total: 0, count: 0 }, credito: { total: 0, count: 0 }, mercadopago: { total: 0, count: 0 }, parcial: { total: 0, count: 0 } };
+            const aliasMap = {};
+            let totalGeneral = 0;
+            let totalGanancia = 0;
+
+            pedidos.forEach(p => {
+                const method = normalizarMedioPago(p.medioPago);
+                metodos[method].total += p.total;
+                metodos[method].count++;
+                totalGeneral += p.total;
+                totalGanancia += p.ganancia;
+
+                // Track aliases for transferencias
+                if (method === 'transferencia' && p.alias) {
+                    const aliasKey = p.alias.trim();
+                    if (aliasKey) {
+                        if (!aliasMap[aliasKey]) aliasMap[aliasKey] = { total: 0, count: 0 };
+                        aliasMap[aliasKey].total += p.total;
+                        aliasMap[aliasKey].count++;
+                    }
+                }
+            });
+
+            // Format date for display
+            const [y, m, d] = fechaSel.split('-');
+            const displayDate = `${d}/${m}/${y}`;
+
+            // Hero
+            heroAmount.textContent = formatCurrency(totalGeneral);
+            heroOrders.textContent = pedidos.length;
+            heroDate.textContent = displayDate;
+
+            // Ganancia (oculta hasta doble clic)
+            gananciaAmount.textContent = formatCurrency(totalGanancia);
+            const pctGanancia = totalGeneral > 0 ? ((totalGanancia / totalGeneral) * 100).toFixed(1) : '0';
+            gananciaPercent.textContent = pctGanancia + '%';
+            gananciaVisible = false;
+            gananciaReveal.classList.remove('visible');
+
+            // Percent bar
+            renderPercentBar(metodos, totalGeneral);
+
+            // Method cards
+            renderMethodCards(metodos, aliasMap);
+
+            // Orders list
+            renderOrdersList(pedidos);
+        }
+
+        function renderPercentBar(metodos, total) {
+            if (total === 0) {
+                percentBar.innerHTML = '';
+                percentLabels.innerHTML = '';
+                return;
+            }
+
+            const methods = ['efectivo', 'transferencia', 'debito', 'credito', 'mercadopago', 'parcial'];
+            const names = { efectivo: 'Efectivo', transferencia: 'Transferencia', debito: 'Débito', credito: 'Crédito', mercadopago: 'MercadoPago', parcial: 'Parcial' };
+
+            let barHTML = '';
+            let labelsHTML = '';
+
+            methods.forEach(m => {
+                const pct = (metodos[m].total / total) * 100;
+                if (pct > 0) {
+                    barHTML += `<div class="percent-segment ${m}" style="width:${pct}%"></div>`;
+                    labelsHTML += `<span class="percent-label"><span class="percent-dot ${m}"></span>${names[m]} ${pct.toFixed(0)}%</span>`;
+                }
+            });
+
+            percentBar.innerHTML = barHTML;
+            percentLabels.innerHTML = labelsHTML;
+        }
+
+        function renderMethodCards(metodos, aliasMap) {
+            const config = [
+                { key: 'efectivo', name: 'Efectivo', icon: 'bi-cash' },
+                { key: 'transferencia', name: 'Transferencia', icon: 'bi-bank' },
+                { key: 'debito', name: 'Débito', icon: 'bi-credit-card-2-front' },
+                { key: 'credito', name: 'Crédito', icon: 'bi-credit-card-2-back' },
+                { key: 'mercadopago', name: 'MercadoPago', icon: 'bi-credit-card' },
+                { key: 'parcial', name: 'Parcial', icon: 'bi-pie-chart' }
+            ];
+
+            let html = '';
+
+            config.forEach((c, i) => {
+                const data = metodos[c.key];
+                if (data.count === 0) return;
+
+                const isTransf = c.key === 'transferencia' && Object.keys(aliasMap).length > 0;
+
+                const cardHTML = `<div class="method-card ${c.key} animate-in delay-${i + 2}" ${isTransf ? 'onclick="toggleAlias()"' : ''}>
+                    <div class="method-icon"><i class="bi ${c.icon}"></i></div>
+                    <div class="method-info">
+                        <div class="method-name">${c.name}</div>
+                        <div class="method-count">${data.count} pedido${data.count !== 1 ? 's' : ''}</div>
+                    </div>
+                    <div class="method-amount">${formatCurrency(data.total)}</div>
+                    ${isTransf ? `<i class="bi bi-chevron-down method-expand-icon${aliasExpanded ? ' expanded' : ''}" id="expandIcon"></i>` : ''}
+                </div>`;
+
+                if (isTransf) {
+                    // El desglose de alias va dentro del mismo grupo, justo debajo
+                    // de la tarjeta Transferencia. Se aplica el estado persistido.
+                    html += `<div class="transf-group">
+                        ${cardHTML}
+                        <div class="alias-panel${aliasExpanded ? ' open' : ''}" id="aliasPanel">
+                            <div class="alias-list" id="aliasList">${buildAliasListHTML(aliasMap)}</div>
+                        </div>
+                    </div>`;
+                } else {
+                    html += cardHTML;
+                }
+            });
+
+            methodsGrid.innerHTML = html;
+        }
+
+        function buildAliasListHTML(aliasMap) {
+            const entries = Object.entries(aliasMap).sort((a, b) => b[1].total - a[1].total);
+
+            if (entries.length === 0) return '';
+
+            let html = '';
+
+            entries.forEach(([alias, data]) => {
+                const initials = alias.substring(0, 2).toUpperCase();
+                html += `<div class="alias-item">
+                    <div class="alias-info">
+                        <div class="alias-badge">${initials}</div>
+                        <div>
+                            <div class="alias-name">${alias}</div>
+                            <div class="alias-name-sub">${data.count} pedido${data.count !== 1 ? 's' : ''}</div>
+                        </div>
+                    </div>
+                    <div class="alias-amount">${formatCurrency(data.total)}</div>
+                </div>`;
+            });
+
+            return html;
+        }
+
+        function toggleAlias() {
+            aliasExpanded = !aliasExpanded;
+            const panel = document.getElementById('aliasPanel');
+            const icon = document.getElementById('expandIcon');
+            if (panel) panel.classList.toggle('open', aliasExpanded);
+            if (icon) icon.classList.toggle('expanded', aliasExpanded);
+        }
+
+        function renderOrdersList(pedidos) {
+            // Sort by total desc
+            const sorted = [...pedidos].sort((a, b) => b.total - a.total);
+            ordersCount.textContent = `${sorted.length}`;
+
+            let html = '';
+            sorted.forEach(p => {
+                const method = normalizarMedioPago(p.medioPago);
+                const methodLabel = { efectivo: 'Efectivo', transferencia: 'Transf.', debito: 'Débito', credito: 'Crédito', mercadopago: 'MP', parcial: 'Parcial' }[method];
+
+                html += `<div class="order-row">
+                    <div class="order-client">${escapeHTML(p.cliente)}</div>
+                    <span class="order-method-badge ${method}">${methodLabel}</span>
+                    <div class="order-total">${formatCurrency(p.total)}</div>
+                </div>`;
+            });
+
+            ordersList.innerHTML = html;
+        }
+
+        function toggleGanancia() {
+            gananciaVisible = !gananciaVisible;
+            gananciaReveal.classList.toggle('visible', gananciaVisible);
+        }
+
+        function formatCurrency(value) {
+            return '$' + value.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        }
+
+        function escapeHTML(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2500);
+        }
+    </script>
+</body>
+</html>
