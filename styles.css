@@ -268,48 +268,14 @@ input[type="radio"]:checked {
   }
 }
 
-/* === Estilos para Scanner de Código de Barras === */
-#barcodeScanner {
-  transition: all 0.3s ease;
-  cursor: pointer;
-}
-
-#barcodeScanner:hover {
-  background: #f1f3f4 !important;
-  border-color: #6c4eb6 !important;
-}
-
-#barcodeInput:focus {
-  outline: none;
-  border-color: #6c4eb6;
-  box-shadow: 0 0 0 3px rgba(108, 78, 182, 0.1);
-}
-
-#barcodeStatus {
-  font-size: 1.2rem;
-  transition: all 0.2s ease;
-}
-
-/* Animación para feedback visual */
-@keyframes barcodePulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-  100% { transform: scale(1); }
-}
-
-#barcodeStatus.scanning {
-  animation: barcodePulse 1s infinite;
-}
-
-/* Highlight para filas escaneadas */
+/* === Filas resaltadas al escanear === */
 .barcode-highlight {
   background-color: #e8f5e8 !important;
   transition: background-color 1.5s ease-out;
 }
 
-/* Estilos para campo de cantidad del scanner */
-#barcodeQuantity:focus {
-  outline: none;
-  border-color: #28a745;
-  box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.1);
+/* La transición suaviza el resaltado que aplica addArticuloFromSearch al agregar
+   o incrementar un artículo desde el lector. */
+.items-table tbody tr {
+  transition: background-color 0.6s ease-out;
 }

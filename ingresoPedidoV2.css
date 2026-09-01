@@ -1,0 +1,2362 @@
+/* ============================================================================
+   ingresoPedidoV2.css — Terminal de cobro "A · Contraste"
+   ----------------------------------------------------------------------------
+   Hoja AUTÓNOMA de ingresoPedidoV2.html. Esta página ya NO carga styles.css:
+   todo lo que antes heredaba de ahí está reimplementado acá abajo. No editar
+   styles.css pensando en esta pantalla — la comparten otras 8 páginas.
+
+   Reglas de convivencia con ingresoPedidoV2.js (no tocar sin leer esto):
+   · El JS pinta varios estados con style inline (background de #adminModeBtn,
+     #cambiosModeBtn, #manualSearchBtn, #cargarClienteBtn, el resaltado verde
+     de la fila escaneada, los colores de #cotizacionValor y #message). Esos
+     inline ganan siempre: la paleta de acá está elegida para acompañarlos, no
+     para pelearlos. NO agregar !important sobre esas propiedades.
+   · Los pocos !important que hay abajo están sobre estilos inline que el JS
+     escribe UNA vez al construir el markup y nunca vuelve a tocar
+     (.articulo-img, .codigo, .cantidad, .valorU, .remove-btn). Son puramente
+     cosméticos.
+   · El CSS de los toasts lo inyecta el JS en <head> DESPUÉS de esta hoja, así
+     que se lo pisa desde #scanToastStack (mayor especificidad).
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- tokens -- */
+:root {
+  /* superficies claras — zona de trabajo */
+  --bg:         #f4f5f7;
+  --surface:    #ffffff;
+  --surface-2:  #fafbfc;
+  --line:       #dde0e5;
+  --line-2:     #e7e9ed;
+  --line-3:     #f0f1f4;
+
+  /* tinta */
+  --ink:        #1a1c20;
+  --ink-2:      #43464e;
+  --ink-3:      #6e7178;
+  --ink-4:      #8a8d95;
+  --ink-5:      #a3a6ae;
+
+  /* panel de cobro — grafito */
+  --pos:        #17181c;
+  --pos-2:      #202228;
+  --pos-3:      #292b32;
+  --pos-line:   #33353c;
+  --pos-line-2: #2a2c33;
+  --pos-line-3: #3d3f48;
+  --pos-ink:    #ffffff;
+  --pos-ink-2:  #e7e8ec;
+  --pos-ink-3:  #c6c8ce;
+  --pos-ink-4:  #9b9ea6;
+  --pos-ink-5:  #7c7f89;
+  --pos-ink-6:  #6c6f78;
+
+  /* acentos — los mismos que el JS impone inline */
+  --violeta:      #6c4eb6;
+  --violeta-2:    #5a3da0;
+  --violeta-3:    #4b2e83;
+  --violeta-claro:#8b6fd6;
+  --violeta-soft: rgba(108, 78, 182, .12);
+  --violeta-ring: rgba(108, 78, 182, .28);
+  --verde:        #28a745;
+  --verde-2:      #218838;
+  --verde-bg:     #e8f5e8;
+  --rojo:         #dc2626;
+  --rojo-bg:      #fef2f2;
+  --rojo-suave:   #c2413b;
+  --rojo-suave-bg:#fcf0f0;
+
+  /* devolución / garantía */
+  --op-devolucion:      #d97706;
+  --op-devolucion-soft: rgba(217, 119, 6, .12);
+  --op-devolucion-bg:   #fffbf2;
+  --op-garantia:        #dc2626;
+  --op-garantia-soft:   rgba(220, 38, 38, .12);
+  --op-garantia-bg:     #fff7f7;
+
+  /* escala de espaciado — todo múltiplo de 4 */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px; --s8: 48px;
+
+  /* radios */
+  --r1: 7px; --r2: 10px; --r3: 14px;
+
+  /* alturas de control — piso táctil de 44px */
+  --h-sm: 38px; --h-md: 44px; --h-lg: 52px; --h-xl: 56px;
+
+  --header-h: 70px;
+
+  --font: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system,
+          'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'Consolas', 'Courier New', monospace;
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, .04);
+  --shadow-2: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .04);
+  --shadow-3: 0 12px 28px rgba(15, 23, 42, .16);
+  --shadow-modal: 0 24px 48px rgba(15, 23, 42, .22);
+
+  /* Springs cortos y críticamente amortiguados: esto es una herramienta de
+     trabajo, no una demo. Sin rebote en ningún lado. */
+  --t-fast: 100ms cubic-bezier(.2, 0, .2, 1);
+  --t-base: 160ms cubic-bezier(.2, 0, .2, 1);
+  --t-slow: 220ms cubic-bezier(.2, 0, .2, 1);
+
+  /* compat: styles.css exponía estas variables y algún fragmento suelto
+     todavía podría leerlas */
+  --primary: #6c4eb6;
+  --background: #f4f5f7;
+  --white: #ffffff;
+  --border: #dde0e5;
+  --radius: 10px;
+  --spacing: 1rem;
+}
+
+/* ------------------------------------------------------------------ base -- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Cifras alineadas en columna: sin esto los totales bailan al recalcular.
+   Es lo más importante de toda la hoja para una caja. */
+.num,
+input[inputmode="numeric"],
+.items-table td,
+.valorTotal,
+.cantidad, .valorU, .codigo,
+#subtotal, #totalFinal, #recargo, #descuento,
+#recargoPorcentaje, #descuentoPorcentaje, #envio,
+.cambio-resumen-valor,
+.cambios-result-id, .cambios-result-total,
+.cambios-origen-id, .cambios-origen-total, .cambios-origen-precio-valor,
+.cambios-cant-input {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+::selection { background: var(--violeta-soft); }
+
+/* Anillo de foco visible: con lector de códigos y teclado saber dónde está el
+   foco es funcional, no decorativo. */
+:focus-visible {
+  outline: 3px solid var(--violeta-ring);
+  outline-offset: 1px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ==========================================================================
+   LAYOUT
+   ========================================================================== */
+
+.container {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------------------- header -- */
+.pos-header {
+  position: sticky;
+  top: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s6);
+  min-height: var(--header-h);
+  padding: var(--s3) var(--s5);
+  background: rgba(244, 245, 247, .84);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  /* Borde por degradado en vez de una línea dura: el contenido se desvanece
+     donde se cruza con la chrome flotante. */
+  border-bottom: 1px solid transparent;
+  background-clip: padding-box;
+  box-shadow: 0 1px 0 rgba(26, 28, 32, .07), 0 6px 16px -12px rgba(16, 24, 40, .3);
+}
+
+.pos-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  min-width: 0;
+}
+
+.pos-logo {
+  height: 30px;
+  width: auto;
+  display: block;
+  flex-shrink: 0;
+}
+
+.pos-indicadores {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding-left: var(--s5);
+  border-left: 1px solid var(--line);
+}
+
+.pos-ind {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+}
+
+.pos-ind-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  white-space: nowrap;
+}
+
+.pos-ind-valor {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pos-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------ grid -- */
+.pos-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: var(--s4);
+  align-items: start;
+  padding: var(--s4) var(--s5) var(--s6);
+}
+
+.pos-work {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+.pos-cobro {
+  position: sticky;
+  top: calc(var(--header-h) + var(--s4));
+  max-height: calc(100vh - var(--header-h) - var(--s7));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+  padding: var(--s5) var(--s5) 0;
+  background: var(--pos);
+  border-radius: var(--r3);
+  box-shadow: 0 8px 28px -12px rgba(16, 24, 40, .5);
+  color: var(--pos-ink-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--pos-line-3) transparent;
+}
+
+.pos-cobro::-webkit-scrollbar { width: 8px; }
+.pos-cobro::-webkit-scrollbar-thumb {
+  background: var(--pos-line-3);
+  border-radius: 999px;
+}
+
+.pos-cobro-sep {
+  height: 1px;
+  background: var(--pos-line-2);
+  flex-shrink: 0;
+}
+
+.pos-cobro-spacer { flex-grow: 1; min-height: var(--s2); }
+
+/* ==========================================================================
+   BOTONES
+   ========================================================================== */
+
+button, input, select, textarea { font-family: inherit; }
+
+/* Feedback en pointer-down, no en click: hoy la interfaz no responde al press
+   y eso es lo primero que se siente lento en una caja. */
+button:active:not(:disabled),
+a.secondary:active {
+  transform: scale(.975);
+}
+
+button, a.secondary {
+  transition: background var(--t-base), color var(--t-base),
+              border-color var(--t-base), box-shadow var(--t-base),
+              transform var(--t-fast), filter var(--t-base);
+}
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: var(--h-xl);
+  padding: 0 var(--s6);
+  background: var(--violeta);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px -4px rgba(108, 78, 182, .45);
+}
+.primary:hover { background: var(--violeta-2); }
+.primary:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: var(--h-md);
+  padding: 0 var(--s4);
+  background: var(--surface);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.secondary:hover { background: var(--surface-2); border-color: #cdd1d8; }
+
+/* El botón de nav destacado. Ojo: NO puede vivir dentro de un .actions —
+   ingresoPedidoV2.js:3757 resuelve el botón Imprimir con
+   `.actions button.secondary` y tomaría el primero que matchee. */
+.pos-nav .secondary {
+  min-width: 112px;
+}
+.pos-nav .nav-destacado {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+.pos-nav .nav-destacado:hover { background: #000; border-color: #000; }
+
+.add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--h-md);
+  padding: 0 var(--s5);
+  background: var(--violeta);
+  color: #fff;
+  border: none;
+  border-radius: var(--r2);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-btn:hover { background: var(--violeta-2); }
+
+.actions {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s3);
+  margin: 0;
+  flex-shrink: 0;
+}
+.actions .primary { flex-grow: 1; }
+
+/* En una caja ni el importe ni el botón de confirmar pueden quedar debajo del
+   scroll: viajan juntos en un pie anclado al piso del panel y el resto del
+   contenido pasa por detrás. */
+.cobro-pie {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin: 0 calc(-1 * var(--s5));
+  padding: var(--s3) var(--s5) var(--s5);
+  background: var(--pos);
+  border-top: 1px solid var(--pos-line-2);
+  box-shadow: 0 -14px 18px -12px var(--pos);
+}
+
+/* Calculadora de cobro */
+.calc-btn {
+  width: var(--h-xl);
+  height: var(--h-xl);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pos-2);
+  color: var(--pos-ink-3);
+  border: 1px solid var(--pos-line-3);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.calc-btn:hover { background: var(--pos-3); color: #fff; }
+
+/* Botón cargar / editar cliente. El JS reescribe el texto de #cargarClienteBtn
+   ('Cargando...', 'Cargado', 'Cargar') y su background cuando queda ocupado,
+   así que se mantiene como botón de texto y no se le fuerza el fondo. */
+.cliente-btn {
+  min-height: var(--h-sm);
+  padding: 0 var(--s3);
+  border: 1px solid transparent;
+  border-radius: var(--r1);
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cliente-btn-cargar { background: var(--verde); }
+.cliente-btn-cargar:hover { background: var(--verde-2); }
+.cliente-btn-cargar:disabled { opacity: .75; cursor: default; }
+.cliente-btn-registrar { background: var(--violeta); }
+.cliente-btn-registrar:hover { background: var(--violeta-2); }
+.cliente-btn-registrar:disabled { opacity: .75; cursor: default; }
+.cliente-btn-editar {
+  background: var(--pos-3);
+  border-color: var(--pos-line-3);
+  color: var(--pos-ink-3);
+}
+.cliente-btn-editar:hover { background: #33353c; color: #fff; }
+
+.remove-btn {
+  background: var(--rojo-suave-bg) !important;
+  color: var(--rojo-suave) !important;
+  border: none !important;
+  border-radius: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  /* el markup del JS le pone display:flex inline, así que se alinea con margin */
+  margin-left: auto !important;
+  font-size: 0 !important;
+  cursor: pointer;
+}
+.remove-btn:hover {
+  background: var(--rojo) !important;
+  color: #fff !important;
+}
+.remove-btn span {
+  font-size: 20px !important;
+  font-weight: 400 !important;
+}
+
+/* ==========================================================================
+   SECCIONES Y FORMULARIOS
+   ========================================================================== */
+
+.section {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+h2 {
+  margin: 0 0 var(--s2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.pos-cobro h2 { color: var(--pos-ink-5); }
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+.form-row:last-child { margin-bottom: 0; }
+
+.form-row > label {
+  flex: 0 0 88px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+  line-height: 1.3;
+}
+
+.form-row input,
+.form-row select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--h-md);
+  padding: 0 var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  font-size: 14.5px;
+  color: var(--ink);
+  background: var(--surface);
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+
+.form-row input::placeholder { color: var(--ink-5); }
+
+.form-row input:focus,
+.form-row select:focus {
+  outline: none;
+  border-color: var(--violeta);
+  box-shadow: 0 0 0 3px var(--violeta-soft);
+}
+
+.form-row input[readonly] {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e7178' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--s3) center;
+  padding-right: var(--s7) !important;
+}
+
+/* ------------------------------------------ formularios del panel oscuro -- */
+.pos-cobro .form-row > label { color: var(--pos-ink-4); }
+
+.pos-cobro .form-row input,
+.pos-cobro .form-row select {
+  background: var(--pos-2);
+  border-color: var(--pos-line);
+  color: var(--pos-ink-2);
+}
+.pos-cobro .form-row input::placeholder { color: var(--pos-ink-6); }
+
+.pos-cobro .form-row input:focus,
+.pos-cobro .form-row select:focus {
+  border-color: var(--violeta-claro);
+  box-shadow: 0 0 0 3px rgba(139, 111, 214, .22);
+}
+
+.pos-cobro .form-row input[readonly] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--pos-ink-2);
+  padding-right: 0;
+}
+
+.pos-cobro select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239b9ea6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* Fila de cliente: nombre + los dos botones */
+.cliente-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+/* "Cliente" (h2) haciendo de label: mismo trato tipográfico que el h2 de
+   sección (mayúsculas, 10px, pos-ink-5), solo se le quita el margen propio
+   y se le da un ancho fijo para que quede en línea con el input. */
+.cliente-row-label {
+  flex: 0 0 64px;
+  margin: 0;
+  white-space: nowrap;
+}
+.cliente-row input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--h-md);
+  padding: 0 var(--s3);
+  border: 1px solid var(--pos-line);
+  border-radius: var(--r2);
+  font-size: 14.5px;
+  background: var(--pos-2);
+  color: var(--pos-ink-2);
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.cliente-row input::placeholder { color: var(--pos-ink-6); }
+.cliente-row input:focus {
+  outline: none;
+  border-color: var(--violeta-claro);
+  box-shadow: 0 0 0 3px rgba(139, 111, 214, .22);
+}
+
+/* Los tres botones (Cargar / Registrar / Editar) van en su propia fila: en una
+   columna de 344–400px no entran al lado del nombre sin recortar el texto, y el
+   JS reescribe el rótulo de #cargarClienteBtn ('Cargando...', 'Cargado', 'Cargar'). */
+.cliente-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+.cliente-acciones .cliente-btn { flex: 1 1 0; min-width: 0; padding: 0 var(--s2); }
+
+.cliente-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-top: var(--s2);
+  padding: var(--s1) 0;
+  background: none;
+  border: none;
+  color: var(--violeta-claro);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.cliente-toggle:hover { color: #a58ae6; }
+.cliente-toggle-arrow { font-size: 9px; line-height: 1; }
+
+#extraClienteFields { padding-top: var(--s2); }
+
+/* La crea el JS con className='form-row' y labels con margin-left inline.
+   Solo se le corrige la geometría — el markup lo sigue generando el JS. */
+#tipoClienteRow {
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+  margin-top: var(--s2);
+}
+#tipoClienteRow > label:first-child {
+  flex: 0 0 100%;
+  font-size: 10px;
+  font-weight: 700 !important;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--pos-ink-5);
+}
+#tipoClienteRow > label:not(:first-child) {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-left: 0 !important;
+  font-size: 13px;
+  color: var(--pos-ink-3);
+  cursor: pointer;
+}
+#tipoClienteRow input[type="radio"] {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--violeta-claro);
+}
+
+/* --------------------------------------------------- filas de importes --- */
+/* Flex column con un único gap fijo: antes el espacio entre renglones salía
+   de márgenes sueltos que no coincidían entre sí (0 entre Recargo/Descuento,
+   12px antes de Medio de Pago por su margin-top propio). Con el gap del
+   contenedor todos los renglones — título incluido — quedan a la misma
+   distancia entre sí. */
+.cobro-pago {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.cobro-pago > h2 { margin: 0; }
+
+.cobro-linea {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: var(--h-md);
+  margin-bottom: 0;
+}
+.cobro-linea > label {
+  flex: 0 0 148px;
+  font-size: 13.5px;
+  font-weight: 400;
+  color: var(--pos-ink-4);
+  white-space: nowrap;
+}
+.cobro-linea input,
+.cobro-linea select {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: right;
+}
+
+.cobro-dual {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: 1 1 0;
+  min-width: 0;
+}
+.cobro-dual input.cobro-pct {
+  flex: 0 0 52px;
+  width: 52px;
+  text-align: center;
+  padding: 0 var(--s1);
+  color: var(--pos-ink-4);
+}
+.cobro-dual input:not(.cobro-pct) {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  text-align: right;
+}
+
+/* Medio de pago: mismo tratamiento que Vendedor y Nota (label a la izquierda,
+   misma altura de fila) para que las tres filas queden simétricas entre sí —
+   gana el renglón que antes ocupaba el label apilado arriba del <select>.
+   Sin margen propio: el gap de .cobro-pago ya lo separa de Descuento igual
+   que separa a Descuento de Recargo. */
+.cobro-medio {
+  margin: 0;
+}
+
+/* Total final: el número más grande de la pantalla. #totalFinalLabel recibe
+   innerHTML con un <strong> en cada recálculo, así que nada estructural puede
+   vivir adentro del label — el estilo va en el contenedor. */
+.cobro-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin: 0;
+}
+.cobro-total > label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--pos-ink-5);
+}
+.cobro-total > label strong { font-weight: 700; }
+
+.pos-cobro .cobro-total input[readonly] {
+  flex: 1 1 0;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: right;
+  font-size: 34px;
+  font-weight: 700;
+  /* Tracking negativo: a este tamaño las letras se leen demasiado separadas. */
+  letter-spacing: -.025em;
+  line-height: 1.1;
+  color: var(--pos-ink);
+}
+
+.cobro-extra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.cobro-extra .form-row { margin-bottom: 0; }
+.cobro-extra .form-row > label,
+.cobro-medio > label {
+  /* 148px porque el label de Medio de Pago cambia dinámicamente a
+     "Medio de devolución*" en el flujo de cambios (ingresoPedidoV2.js) y
+     tiene que seguir entrando en una sola línea. */
+  flex: 0 0 148px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   PANEL DE ESCANEO
+   ========================================================================== */
+
+.scan-panel {
+  --scan-accent: var(--violeta);
+  --scan-accent-soft: var(--violeta-soft);
+  position: relative;
+  margin: 0;
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  box-shadow: var(--shadow-2);
+  transition: border-color var(--t-slow), box-shadow var(--t-slow),
+              background-color var(--t-slow);
+}
+.scan-panel[data-estado="pausa"]  { --scan-accent: #94a3b8; --scan-accent-soft: rgba(148,163,184,.16); }
+.scan-panel[data-estado="listo"]  { --scan-accent: var(--violeta); --scan-accent-soft: var(--violeta-soft); border-color: #c9b9ee; }
+.scan-panel[data-estado="ok"]     { --scan-accent: var(--verde); --scan-accent-soft: rgba(40,167,69,.18); border-color: #b8dcc0; background: #f7fdf9; }
+.scan-panel[data-estado="error"]  { --scan-accent: var(--rojo); --scan-accent-soft: rgba(220,38,38,.18); border-color: #f0bcbc; background: #fffafa; }
+.scan-panel[data-estado="elegir"] { --scan-accent: var(--op-devolucion); --scan-accent-soft: rgba(217,119,6,.18); border-color: #ecd5aa; background: #fffdf7; }
+.scan-panel[data-estado="catalogo-error"] { --scan-accent: var(--rojo); --scan-accent-soft: rgba(220,38,38,.18); border-color: #f0bcbc; background: #fffafa; }
+
+.scan-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+  flex-wrap: wrap;
+}
+
+.scan-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--scan-accent);
+  transition: color var(--t-slow);
+}
+
+.scan-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--scan-accent);
+  flex-shrink: 0;
+  transition: background-color var(--t-slow), box-shadow var(--t-slow);
+}
+.scan-panel[data-estado="listo"] .scan-status-dot {
+  box-shadow: 0 0 0 4px var(--scan-accent-soft);
+  animation: scanPulse 2s ease-in-out infinite;
+}
+@keyframes scanPulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--scan-accent-soft); }
+  50%      { box-shadow: 0 0 0 6px rgba(108, 78, 182, 0); }
+}
+
+.scan-counters {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 13px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.scan-counters strong { color: var(--ink); font-weight: 600; }
+.scan-counters-sep { color: #c9ccd2; }
+
+.scan-panel-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px auto auto;
+  gap: var(--s3);
+  align-items: stretch;
+}
+
+.scan-input-wrap {
+  position: relative;
+  min-width: 0;
+  display: flex;
+}
+
+.scan-input-icon {
+  position: absolute;
+  left: var(--s4);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  color: var(--scan-accent);
+  pointer-events: none;
+  transition: color var(--t-slow);
+}
+
+.scan-input {
+  width: 100%;
+  height: var(--h-lg);
+  padding: 0 var(--s4) 0 var(--s8);
+  border: 1.5px solid var(--scan-accent);
+  border-radius: 11px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: .4px;
+  color: var(--ink);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--t-slow), box-shadow var(--t-base);
+}
+.scan-input::placeholder {
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--ink-5);
+  font-size: 15px;
+}
+.scan-input:focus { box-shadow: 0 0 0 3px var(--scan-accent-soft); }
+
+.scan-qty-input {
+  width: 100%;
+  height: var(--h-lg);
+  align-self: stretch;
+  padding: 0 var(--s1);
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.scan-qty-input:focus {
+  border-color: var(--verde);
+  box-shadow: 0 0 0 3px rgba(40, 167, 69, .16);
+}
+
+.scan-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  height: var(--h-lg);
+  padding: 0 var(--s6);
+  background: var(--ink);
+  color: #fff;
+  border: none;
+  border-radius: 11px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scan-add-btn:hover { background: #000; }
+
+/* El JS le pisa background/color/borderColor inline al alternar el modo
+   manual (#28a745 activo). Acá solo va la geometría y el estado inactivo. */
+.scan-manual-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  height: var(--h-lg);
+  padding: 0 var(--s4);
+  background: var(--surface);
+  color: var(--violeta);
+  border: 1px solid var(--violeta);
+  border-radius: 11px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scan-manual-btn:hover { filter: brightness(.97); }
+
+.scan-notfound {
+  display: none;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--rojo-bg);
+  border: 1px solid #fecaca;
+  border-radius: var(--r2);
+  font-size: 13.5px;
+  color: #b91c1c;
+  animation: scanShake .28s ease;
+}
+.scan-notfound.visible { display: flex; }
+
+.scan-notfound-code {
+  font-family: var(--mono);
+  font-weight: 700;
+  background: #fff;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 2px var(--s2);
+  word-break: break-all;
+}
+
+.scan-notfound-btn {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 var(--s4);
+  background: var(--violeta);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scan-notfound-btn:hover { background: var(--violeta-2); }
+
+@keyframes scanShake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-4px); }
+  75%      { transform: translateX(4px); }
+}
+
+.scan-help {
+  margin-top: var(--s3);
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.45;
+}
+.scan-help:empty { display: none; margin: 0; }
+
+/* ------------------------------------------- resultados de la búsqueda --- */
+.scan-results {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  max-height: 380px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: var(--shadow-3);
+  padding: var(--s1);
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  padding: var(--s2) var(--s3);
+  cursor: pointer;
+  border-radius: 8px;
+  border-bottom: none;
+  transition: background-color var(--t-fast);
+}
+.search-result-item:hover { background: #f5f2fb; }
+.search-result-item.keyboard-selected {
+  background: #ede7f9;
+  box-shadow: inset 3px 0 0 var(--violeta);
+}
+
+.search-result-img,
+.search-result-img-placeholder {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-right: var(--s3);
+  flex-shrink: 0;
+  background: var(--line-3);
+}
+.search-result-img-placeholder {
+  background: var(--line-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-5);
+  font-size: 11px;
+}
+
+.search-result-info { flex: 1; min-width: 0; }
+
+.search-result-name {
+  font-weight: 500;
+  color: var(--ink);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-code {
+  font-size: 12px;
+  color: var(--ink-4);
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-no-results {
+  padding: var(--s4);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+/* ==========================================================================
+   TABLA DE ARTÍCULOS
+   ========================================================================== */
+
+.pos-items {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r3);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.items-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0;
+  table-layout: fixed;
+}
+
+.items-table th {
+  height: 40px;
+  padding: 0 var(--s2);
+  background: var(--surface-2);
+  border: none;
+  border-bottom: 1px solid var(--line-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* Anchos fijos: la simetría de la grilla depende de esto y las 7 columnas
+   NO se pueden reordenar (el JS construye los <td> en este orden). */
+.items-table th:nth-child(1) { width: 64px;  text-align: center; }
+.items-table th:nth-child(2) { width: 92px;  }
+.items-table th:nth-child(3) { width: auto;  }
+.items-table th:nth-child(4) { width: 70px;  text-align: center; }
+.items-table th:nth-child(5) { width: 112px; text-align: right; }
+.items-table th:nth-child(6) { width: 112px; text-align: right; }
+.items-table th:nth-child(7) { width: 62px;  text-align: right; }
+
+.items-table td {
+  padding: var(--s2);
+  border: none;
+  border-bottom: 1px solid var(--line-3);
+  vertical-align: middle;
+  font-size: 14.5px;
+  background: transparent;
+}
+
+/* El fondo va en el <tr> y NO lleva !important: el JS pinta el resaltado
+   verde del escaneo con tr.style.backgroundColor y tiene que poder ganar. */
+.items-table tbody tr { background: var(--surface); }
+.items-table tbody tr:last-child td { border-bottom: none; }
+
+.items-table td:nth-child(1) { text-align: center; width: 64px; padding: var(--s1); }
+.items-table td:nth-child(4) { text-align: center; }
+.items-table td:nth-child(5),
+.items-table td:nth-child(6) { text-align: right; }
+.items-table td:nth-child(7) { text-align: right; }
+
+.articulo-img {
+  width: 48px !important;
+  height: 48px !important;
+  border: none !important;
+  border-radius: 8px !important;
+  background: var(--line-3);
+  transition: transform var(--t-base);
+}
+.articulo-img:hover { transform: scale(1.06); }
+
+/* Los width inline (80/60/80px) vienen del markup que arma el JS; se pisan
+   para que las columnas queden alineadas. Es puramente geométrico. */
+.items-table .codigo,
+.items-table .cantidad,
+.items-table .valorU {
+  width: 100% !important;
+  height: var(--h-sm);
+  padding: 0 var(--s2);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--ink-2);
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.items-table .cantidad {
+  text-align: center;
+  background: var(--surface);
+  border-color: var(--line);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.items-table .valorU { text-align: right; }
+
+.items-table input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.items-table input[type="number"]::-webkit-outer-spin-button,
+.items-table input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.items-table .codigo:focus,
+.items-table .cantidad:focus,
+.items-table .valorU:focus {
+  border-color: var(--violeta);
+  box-shadow: 0 0 0 3px var(--violeta-soft);
+}
+.items-table .codigo[readonly],
+.items-table .valorU[readonly] { color: var(--ink-3); }
+
+.nombre-display {
+  padding: 0 !important;
+  min-width: 0 !important;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.valorTotal {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.valorU-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+.valorU-wrap .valorU { flex: 1 1 0; min-width: 0; }
+
+.desbloquear-valor-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--ink-5);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.desbloquear-valor-btn:hover {
+  color: var(--op-devolucion);
+  background: #fef3c7;
+}
+
+/* Filas de devolución y garantía. El fondo va en los <td> — igual que en el
+   diseño original — para que se lea aunque el JS pinte el <tr>. */
+.items-table tr.linea-devolucion > td { background: var(--op-devolucion-bg); }
+.items-table tr.linea-devolucion > td:first-child { box-shadow: inset 3px 0 0 var(--op-devolucion); }
+.items-table tr.linea-garantia > td { background: var(--op-garantia-bg); }
+.items-table tr.linea-garantia > td:first-child { box-shadow: inset 3px 0 0 var(--op-garantia); }
+
+.items-table tr.linea-devolucion .valorTotal { color: var(--op-devolucion); font-weight: 700; }
+.items-table tr.linea-garantia .valorTotal {
+  color: var(--op-garantia);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+.linea-badge {
+  display: inline-block;
+  margin-right: var(--s2);
+  padding: 2px var(--s2);
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  color: #fff;
+}
+.linea-badge-devolucion { background: var(--op-devolucion); }
+.linea-badge-garantia   { background: var(--op-garantia); }
+
+.linea-origen {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: #8a7a5e;
+}
+.linea-origen strong {
+  font-family: var(--mono);
+  letter-spacing: .02em;
+  color: #6b5c42;
+  font-weight: 600;
+}
+
+/* Resaltado que aplica el JS al escanear (suaviza el corte al desaparecer) */
+.barcode-highlight { background-color: var(--verde-bg) !important; }
+.items-table tbody tr { transition: background-color .6s ease-out; }
+
+/* Estado de carga que inyecta el JS */
+.items-table:empty { display: none; }
+
+/* ==========================================================================
+   CAMBIOS Y DEVOLUCIONES
+   ========================================================================== */
+
+.cambios-panel {
+  margin: 0;
+  padding: var(--s4) var(--s5);
+  background: var(--op-devolucion-bg);
+  border: 1px solid var(--op-devolucion);
+  border-radius: var(--r3);
+  box-shadow: var(--shadow-2);
+  animation: cambiosEntrada var(--t-slow) ease-out;
+}
+.cambios-panel[hidden] { display: none; }
+
+@keyframes cambiosEntrada {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.cambios-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+  flex-wrap: wrap;
+}
+
+.cambios-panel-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--op-devolucion);
+}
+
+.cambios-panel-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.cambios-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 999px;
+  padding: 3px var(--s3);
+  white-space: nowrap;
+}
+
+.cambios-cerrar {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cambios-cerrar:hover { background: #fef3c7; }
+
+.cambios-buscador {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s3);
+  align-items: stretch;
+}
+
+.cambios-input-wrap { position: relative; min-width: 0; display: flex; }
+
+.cambios-input-icon {
+  position: absolute;
+  left: var(--s4);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  color: var(--op-devolucion);
+  pointer-events: none;
+}
+
+.cambios-input {
+  width: 100%;
+  height: var(--h-lg);
+  padding: 0 var(--s4) 0 var(--s8);
+  border: 1.5px solid var(--op-devolucion);
+  border-radius: 11px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  color: var(--ink);
+  background: #fff;
+  outline: none;
+  transition: box-shadow var(--t-base);
+}
+.cambios-input::placeholder {
+  font-weight: 400;
+  letter-spacing: normal;
+  color: #b08968;
+  font-size: 14px;
+}
+.cambios-input:focus { box-shadow: 0 0 0 3px var(--op-devolucion-soft); }
+
+.cambios-ampliar-btn {
+  height: var(--h-lg);
+  padding: 0 var(--s4);
+  background: #fff;
+  color: var(--op-devolucion);
+  border: 1px solid var(--op-devolucion);
+  border-radius: 11px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cambios-ampliar-btn:hover { background: #fef3c7; }
+.cambios-ampliar-btn:disabled { opacity: .55; cursor: progress; }
+
+.cambios-ayuda {
+  margin: var(--s3) 0 0;
+  font-size: 12.5px;
+  color: #78716c;
+  line-height: 1.45;
+}
+
+.cambios-resultados {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--op-devolucion);
+  border-radius: var(--r2);
+  max-height: 340px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: var(--shadow-3);
+  padding: var(--s1);
+}
+.cambios-resultados.visible { display: block; }
+
+.cambios-result-item {
+  padding: var(--s2) var(--s3);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background-color var(--t-fast);
+}
+.cambios-result-item:hover { background: #fef8ea; }
+.cambios-result-item.keyboard-selected {
+  background: #fef3c7;
+  box-shadow: inset 3px 0 0 var(--op-devolucion);
+}
+
+.cambios-result-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+.cambios-result-id {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+  letter-spacing: .04em;
+}
+.cambios-result-total { font-weight: 700; color: var(--ink); font-size: 13.5px; }
+.cambios-result-meta { font-size: 12px; color: #78716c; margin-top: 2px; }
+
+.cambios-vacio {
+  padding: var(--s4);
+  text-align: center;
+  color: #78716c;
+  font-size: 13px;
+}
+
+/* --------------------------------------------- tarjeta del pedido origen -- */
+.cambios-origen {
+  margin-top: var(--s4);
+  background: #fff;
+  border: 1px solid #fde68a;
+  border-radius: var(--r2);
+  overflow: hidden;
+}
+.cambios-origen[hidden] { display: none; }
+
+.cambios-origen-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: #fef3c7;
+  border-bottom: 1px solid #fde68a;
+}
+.cambios-origen-id {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink);
+  letter-spacing: .04em;
+}
+.cambios-origen-meta { font-size: 12.5px; color: #92400e; }
+.cambios-origen-total { font-weight: 700; color: var(--ink); }
+
+/* Aviso del descuento que tuvo el pedido original: explica por qué el importe de la
+   devolución no coincide con el precio impreso en el ticket. */
+.cambios-origen-descuento-aviso {
+  padding: var(--s2) var(--s4);
+  background: var(--op-devolucion-bg);
+  border-bottom: 1px solid #fde68a;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #92400e;
+}
+
+.cambios-origen-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid #f5f0e8;
+}
+.cambios-origen-item:last-child { border-bottom: none; }
+
+.cambios-origen-img {
+  width: 48px; height: 48px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--line-3);
+}
+
+.cambios-origen-info { flex: 1; min-width: 0; }
+.cambios-origen-nombre {
+  font-weight: 500; color: var(--ink); font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cambios-origen-cod { font-size: 11.5px; color: var(--ink-4); margin-top: 2px; }
+.cambios-origen-aviso {
+  font-size: 11.5px; color: var(--op-devolucion);
+  margin-top: 3px; font-weight: 600;
+}
+
+.cambios-origen-precio {
+  flex-shrink: 0;
+  text-align: right;
+  min-width: 112px;
+}
+.cambios-origen-precio-label {
+  display: block; font-size: 10px; color: var(--ink-4);
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 700;
+}
+.cambios-origen-precio-valor {
+  display: block; font-size: 16px; font-weight: 600; color: var(--ink);
+}
+.cambios-origen-precio-lista {
+  display: block; font-size: 11px; color: var(--ink-4); margin-top: 1px;
+}
+.cambios-origen-precio-lista s { text-decoration-thickness: 1px; }
+
+.cambios-origen-acciones {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-shrink: 0;
+}
+
+.cambios-cant-input {
+  width: 56px;
+  height: var(--h-md);
+  padding: 0 var(--s1);
+  text-align: center;
+  border: 1px solid #e7e5e4;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.cambios-cant-input:focus {
+  border-color: var(--op-devolucion);
+  box-shadow: 0 0 0 3px var(--op-devolucion-soft);
+}
+
+.cambios-btn-devolver,
+.cambios-btn-falla {
+  min-height: var(--h-md);
+  padding: 0 var(--s3);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.cambios-btn-devolver { background: var(--op-devolucion); color: #fff; }
+.cambios-btn-falla    { background: #fff; color: var(--op-garantia); border-color: var(--op-garantia); }
+.cambios-btn-devolver:hover,
+.cambios-btn-falla:hover { filter: brightness(.94); }
+
+/* Linea sin unidades disponibles: ya se devolvio o reemplazo todo lo que el
+   cliente habia comprado, asi que no se puede seguir descontando stock. */
+.cambios-btn-devolver:disabled,
+.cambios-btn-falla:disabled,
+.cambios-cant-input:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  filter: none;
+}
+.cambios-origen-agotada { opacity: .72; }
+.cambios-origen-agotada .cambios-origen-nombre { text-decoration: line-through; }
+.cambios-origen-agotada .cambios-origen-aviso { color: var(--ink-4); }
+
+/* ------------------------------ resumen de la diferencia (panel de cobro) -- */
+.cambio-resumen {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s2);
+  margin: 0;
+  flex-shrink: 0;
+}
+.cambio-resumen[hidden] { display: none; }
+
+.cambio-resumen-celda {
+  background: var(--pos-2);
+  border: 1px solid var(--pos-line);
+  border-radius: var(--r1);
+  padding: var(--s1) var(--s2);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cambio-resumen-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--pos-ink-5);
+}
+.cambio-resumen-valor {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--pos-ink);
+  white-space: nowrap;
+}
+.cambio-resumen-valor.negativo { color: #f0a44a; }
+.cambio-resumen-valor.positivo { color: #5cc98a; }
+
+/* ---------------------------------- aviso de devoluciones (modo edición) -- */
+.aviso-devoluciones {
+  background: var(--op-devolucion-bg);
+  border: 1px solid var(--op-devolucion);
+  border-left: 4px solid var(--op-devolucion);
+  border-radius: var(--r2);
+  padding: var(--s3) var(--s4);
+  margin: 0 var(--s5) var(--s4);
+  box-shadow: var(--shadow-1);
+}
+.aviso-dev-titulo {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--op-devolucion);
+  margin-bottom: var(--s2);
+}
+.aviso-dev-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.aviso-dev-lista li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2) var(--s3);
+  font-size: 13px;
+  color: #57534e;
+}
+.aviso-dev-linea { font-weight: 600; color: #292524; }
+.aviso-dev-tipo {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--op-devolucion);
+  margin-left: var(--s2);
+}
+.aviso-dev-ref { font-size: 12px; color: #78716c; }
+.aviso-dev-ref a { color: var(--op-devolucion); font-weight: 700; text-decoration: none; }
+.aviso-dev-ref a:hover { text-decoration: underline; }
+.aviso-dev-nota { margin-top: var(--s2); font-size: 11.5px; color: #78716c; }
+
+/* Mensaje de pedido cancelado que inserta el JS antes del <form> */
+#lockedMsg { margin: 0 var(--s5) var(--s4) !important; }
+
+/* ==========================================================================
+   MODALES
+   ========================================================================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 18, 22, .55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  z-index: 10000;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s4);
+}
+
+.modal-card {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: var(--s7);
+  width: 100%;
+  max-width: 380px;
+  box-shadow: var(--shadow-modal);
+  animation: fadeInUp var(--t-slow) ease forwards;
+}
+.modal-card-ancha { max-width: 420px; }
+
+.modal-titulo {
+  margin: 0 0 var(--s2);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--ink);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+}
+
+.modal-sub {
+  margin: 0 0 var(--s5);
+  font-size: 13.5px;
+  color: var(--ink-3);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.modal-error {
+  display: none;
+  background: var(--rojo-bg);
+  border: 1px solid #fecaca;
+  color: var(--rojo);
+  padding: var(--s3);
+  border-radius: var(--r2);
+  font-size: 13.5px;
+  margin-bottom: var(--s3);
+  text-align: left;
+}
+
+.modal-input {
+  width: 100%;
+  height: var(--h-md);
+  padding: 0 var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.modal-input:focus {
+  border-color: var(--violeta);
+  box-shadow: 0 0 0 3px var(--violeta-soft);
+}
+
+.modal-acciones {
+  display: flex;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+.modal-btn-sec,
+.modal-btn-pri {
+  flex: 1 1 0;
+  min-height: var(--h-md);
+  border-radius: var(--r2);
+  font-size: 14.5px;
+  cursor: pointer;
+}
+.modal-btn-sec {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.modal-btn-sec:hover { background: var(--surface-2); }
+.modal-btn-pri {
+  border: none;
+  background: var(--violeta);
+  color: #fff;
+  font-weight: 600;
+}
+.modal-btn-pri:hover { background: var(--violeta-2); }
+
+/* ---------------------------------------------------- calculadora de cobro -- */
+.calc-destacado {
+  background: #f5f2fb;
+  border: 1px solid #e4dcf5;
+  border-radius: var(--r2);
+  padding: var(--s4);
+  margin-bottom: var(--s5);
+  text-align: center;
+}
+.calc-destacado-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: var(--s1);
+}
+.calc-destacado-valor {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -.025em;
+  line-height: 1.1;
+  color: var(--violeta);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-campo-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: var(--s2);
+}
+
+.calc-input {
+  width: 100%;
+  height: var(--h-lg);
+  padding: 0 var(--s4);
+  border: 1.5px solid var(--line);
+  border-radius: var(--r2);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  outline: none;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.calc-input:focus {
+  border-color: var(--violeta);
+  box-shadow: 0 0 0 3px var(--violeta-soft);
+}
+
+.calc-resultado {
+  display: none;
+  border-radius: var(--r2);
+  padding: var(--s4);
+  margin-top: var(--s4);
+  text-align: center;
+}
+.calc-resultado-vuelto { background: #ecfdf3; border: 1px solid #bbe7cd; }
+.calc-resultado-falta  { background: var(--rojo-bg); border: 1px solid #fecaca; }
+.calc-resultado-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: var(--s1);
+}
+.calc-resultado-valor {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.calc-resultado-vuelto .calc-resultado-valor { color: #16803d; }
+.calc-resultado-falta  .calc-resultado-valor { color: var(--rojo); }
+
+/* --------------------------------------- modal de confirmación de cambio -- */
+.confirmar-cambio-modal {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: var(--s7);
+  width: 100%;
+  max-width: 440px;
+  box-shadow: var(--shadow-modal);
+  animation: fadeInUp var(--t-slow) ease forwards;
+}
+.confirmar-cambio-titulo {
+  margin: 0 0 var(--s1);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--ink);
+  text-align: center;
+}
+.confirmar-cambio-sub {
+  margin: 0 0 var(--s5);
+  font-size: 13px;
+  color: var(--ink-3);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.confirmar-cambio-movs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s5);
+}
+.confirmar-cambio-mov {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3);
+  border-radius: var(--r2);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.confirmar-cambio-mov.entrada { background: #ecfdf3; border-left: 3px solid #16a34a; }
+.confirmar-cambio-mov.salida  { background: var(--op-garantia-bg); border-left: 3px solid var(--op-garantia); }
+.confirmar-cambio-mov-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 104px;
+}
+.confirmar-cambio-mov.entrada .confirmar-cambio-mov-tag { color: #15803d; }
+.confirmar-cambio-mov.salida  .confirmar-cambio-mov-tag { color: var(--op-garantia); }
+.confirmar-cambio-mov-detalle { flex: 1; min-width: 0; }
+
+.confirmar-cambio-datos {
+  margin: 0 0 var(--s5);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r2);
+  font-size: 13.5px;
+}
+.confirmar-cambio-datos > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: 3px 0;
+}
+.confirmar-cambio-datos dt { color: var(--ink-3); margin: 0; }
+.confirmar-cambio-datos dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.confirmar-cambio-acciones { display: flex; gap: var(--s2); }
+.confirmar-cambio-btn-sec,
+.confirmar-cambio-btn-pri {
+  flex: 1 1 0;
+  min-height: var(--h-md);
+  border-radius: var(--r2);
+  font-size: 14.5px;
+  cursor: pointer;
+}
+.confirmar-cambio-btn-sec {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.confirmar-cambio-btn-sec:hover { background: var(--surface-2); }
+.confirmar-cambio-btn-pri {
+  border: none;
+  background: var(--op-devolucion);
+  color: #fff;
+  font-weight: 600;
+}
+.confirmar-cambio-btn-pri:hover { filter: brightness(.94); }
+
+/* ==========================================================================
+   LOGIN
+   ========================================================================== */
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: var(--s4);
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: var(--s8) var(--s7);
+  box-shadow: 0 24px 48px -16px rgba(16, 24, 40, .22);
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  animation: fadeInUp .4s cubic-bezier(.2, 0, .2, 1) forwards;
+}
+
+.login-logo {
+  width: 200px;
+  height: auto;
+  margin: 0 auto var(--s6);
+  display: block;
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  color: var(--ink);
+  margin: 0 0 var(--s1);
+}
+
+.login-subtitle {
+  font-size: 13.5px;
+  color: var(--ink-3);
+  margin: 0 0 var(--s7);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.login-input {
+  width: 100%;
+  height: var(--h-md);
+  padding: 0 var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--t-base), box-shadow var(--t-base);
+}
+.login-input:focus {
+  border-color: var(--violeta);
+  box-shadow: 0 0 0 3px var(--violeta-soft);
+}
+
+.login-btn {
+  width: 100%;
+  min-height: var(--h-lg);
+  margin-top: var(--s2);
+  background: var(--violeta);
+  color: #fff;
+  border: none;
+  border-radius: var(--r2);
+  font-size: 15.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px -4px rgba(108, 78, 182, .4);
+}
+.login-btn:hover { background: var(--violeta-2); }
+.login-btn:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; }
+
+.login-error {
+  background: var(--rojo-bg);
+  border: 1px solid #fecaca;
+  color: var(--rojo);
+  padding: var(--s3);
+  border-radius: var(--r2);
+  font-size: 13.5px;
+  display: none;
+  margin-bottom: var(--s2);
+  text-align: left;
+}
+
+/* ==========================================================================
+   MENSAJES Y TOASTS
+   ========================================================================== */
+
+#message {
+  margin: 0 var(--s5) var(--s6);
+  text-align: center;
+  font-weight: 600;
+  font-size: 14.5px;
+}
+#message:empty { display: none; }
+
+/* El CSS de los toasts lo inyecta ingresoPedidoV2.js en <head> DESPUÉS de esta
+   hoja, así que se lo pisa con la especificidad del contenedor. */
+#scanToastStack .scan-toast {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--verde);
+  border-radius: var(--r3);
+  box-shadow: 0 12px 28px -8px rgba(16, 24, 40, .28);
+  color: var(--ink);
+}
+#scanToastStack .scan-toast-accion {
+  color: var(--verde-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+#scanToastStack .scan-toast-nombre {
+  color: var(--ink);
+  font-weight: 500;
+}
+#scanToastStack .scan-toast-cant {
+  background: var(--ink);
+  color: #fff;
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+#scanToastStack .scan-toast-img { border-radius: 8px; }
+#scanToastStack .scan-toast.error { border-left-color: var(--rojo); }
+#scanToastStack .scan-toast.error .scan-toast-accion { color: var(--rojo); }
+#scanToastStack .scan-toast.error .scan-toast-cant { background: var(--rojo); }
+#scanToastStack .scan-toast.devolucion { border-left-color: var(--op-devolucion); }
+#scanToastStack .scan-toast.devolucion .scan-toast-accion { color: var(--op-devolucion); }
+#scanToastStack .scan-toast.devolucion .scan-toast-cant { background: var(--op-devolucion); }
+#scanToastStack .scan-toast.garantia { border-left-color: var(--op-garantia); }
+#scanToastStack .scan-toast.garantia .scan-toast-accion { color: var(--op-garantia); }
+#scanToastStack .scan-toast.garantia .scan-toast-cant { background: var(--op-garantia); }
+
+/* ==========================================================================
+   RESPONSIVE — objetivo principal: tablet apaisada 1024–1280
+   ========================================================================== */
+
+/* Tablet apaisada chica: se angosta la columna de cobro antes que la de trabajo */
+@media (max-width: 1180px) {
+  .pos-grid {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    padding: var(--s3) var(--s4) var(--s5);
+    gap: var(--s3);
+  }
+  .pos-cobro { padding: var(--s4) var(--s4) 0; }
+  .cobro-pie { margin: 0 calc(-1 * var(--s4)); padding: var(--s3) var(--s4) var(--s4); }
+  .pos-cobro .cobro-total input[readonly] { font-size: 30px; }
+  .pos-nav .secondary { min-width: 0; padding: 0 var(--s3); }
+
+  /* La tabla se aprieta para que el nombre del artículo conserve ancho útil */
+  .items-table td { font-size: 13.5px; padding: var(--s2) var(--s1); }
+  .items-table th { padding: 0 var(--s1); letter-spacing: .05em; }
+  .items-table td:first-child, .items-table th:first-child { padding: var(--s1); }
+  .items-table th:nth-child(1) { width: 54px; }
+  .items-table th:nth-child(2) { width: 80px; }
+  .items-table th:nth-child(4) { width: 62px; }
+  .items-table th:nth-child(5) { width: 96px; }
+  .items-table th:nth-child(6) { width: 104px; }
+  .items-table th:nth-child(7) { width: 48px; }
+  .items-table td:nth-child(1) { width: 54px; }
+  .articulo-img { width: 40px !important; height: 40px !important; }
+  .nombre-display { font-size: 13.5px; }
+  .valorTotal { font-size: 14.5px; }
+  .items-table .codigo,
+  .items-table .cantidad,
+  .items-table .valorU { height: 34px; padding: 0 var(--s1); font-size: 13px; }
+}
+
+@media (max-width: 1080px) {
+  .pos-indicadores { padding-left: var(--s4); gap: var(--s3); }
+  .pos-logo { height: 26px; }
+  .scan-panel-row { grid-template-columns: minmax(0, 1fr) 72px auto auto; }
+  .scan-add-btn { padding: 0 var(--s4); }
+  .scan-manual-btn { padding: 0 var(--s3); }
+}
+
+/* Tablet vertical: una sola columna. El panel de cobro deja la grilla y se
+   ancla al piso de la pantalla como barra de cobro. Adentro conserva el mismo
+   flujo en columna que en apaisado — y el mismo pie pegajoso — porque una
+   grilla de dos columnas con colocación explícita se desarma en escalera
+   apenas aparece o desaparece el resumen de cambio. */
+@media (max-width: 900px) {
+  .pos-header {
+    flex-wrap: wrap;
+    gap: var(--s2);
+    padding: var(--s2) var(--s3);
+    min-height: 0;
+  }
+  .pos-nav { width: 100%; overflow-x: auto; padding-bottom: 2px; }
+  .pos-nav .secondary { flex-shrink: 0; }
+
+  .pos-grid {
+    grid-template-columns: minmax(0, 1fr);
+    /* deja lugar para que la tabla pueda scrollear por detrás de la barra */
+    padding: var(--s3) var(--s4) calc(46vh + var(--s4));
+    gap: var(--s3);
+  }
+
+  /* Fixed y no sticky: en una grilla de una sola columna el área del ítem mide
+     lo mismo que el ítem y sticky nunca llegaría a correr. */
+  .pos-cobro {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 90;
+    max-height: 46vh;
+    padding: var(--s4) var(--s5) 0;
+    border-radius: var(--r3) var(--r3) 0 0;
+    box-shadow: 0 -8px 28px -12px rgba(16, 24, 40, .55);
+  }
+  .cobro-pie { margin: 0 calc(-1 * var(--s5)); padding: var(--s3) var(--s5) var(--s4); }
+  .pos-cobro-sep { display: none; }
+  .pos-cobro-spacer { display: none; }
+
+  /* En horizontal hay ancho de sobra: cliente y pago van lado a lado dentro
+     de la barra para que entren más renglones sin scrollear. */
+  .cobro-cliente,
+  .cobro-pago { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 var(--s4); }
+  .cobro-pago > h2 { grid-column: 1 / -1; }
+  .cobro-cliente > .cliente-row:first-of-type,
+  .cobro-cliente > .cliente-acciones { grid-column: 1; }
+  .cobro-cliente > .cliente-row:last-of-type { grid-column: 2; }
+  #extraClienteFields { grid-column: 1 / -1; }
+  .cobro-pago > .cobro-linea { grid-column: 1; }
+  .cobro-pago > .cobro-medio { grid-column: 2; grid-row: 2 / span 3; align-self: start; }
+  .cobro-extra { flex-direction: row; gap: var(--s3); }
+  .cobro-extra .form-row { flex: 1 1 0; min-width: 0; }
+  /* Vendedor/Nota comparten fila entre sí acá (3 columnas angostas): el label
+     fijo de 148px pensado para la barra en columna única no entra. */
+  .cobro-extra .form-row > label { flex: 0 0 auto; }
+}
+
+/* Tablet vertical angosta / teléfono grande */
+@media (max-width: 760px) {
+  .pos-grid { padding-bottom: calc(54vh + var(--s4)); }
+  .pos-cobro { max-height: 54vh; padding: var(--s4) var(--s4) 0; }
+  .cobro-pie { margin: 0 calc(-1 * var(--s4)); padding: var(--s3) var(--s4) var(--s4); }
+  .cobro-cliente,
+  .cobro-pago { display: block; }
+  .cobro-extra { flex-direction: column; }
+  .scan-panel-row { grid-template-columns: minmax(0, 1fr) 72px; }
+  .scan-input-wrap { grid-column: 1 / -1; }
+  .cambios-buscador { grid-template-columns: minmax(0, 1fr); }
+  .cambios-origen-item { flex-wrap: wrap; }
+  .cambios-origen-precio { min-width: 0; text-align: left; }
+  .cambios-origen-precio-lista { display: inline; margin-left: var(--s2); }
+  .cambios-origen-acciones { width: 100%; justify-content: flex-end; }
+  .items-table th:nth-child(1),
+  .items-table td:nth-child(1) { width: 48px; }
+  .articulo-img { width: 36px !important; height: 36px !important; }
+}
+
+/* ==========================================================================
+   PREFERENCIAS DEL SISTEMA
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  button:active:not(:disabled),
+  a.secondary:active { transform: none; }
+  .scan-panel[data-estado="listo"] .scan-status-dot { animation: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .pos-header {
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .modal-overlay {
+    background: rgba(16, 18, 22, .72);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --line:   #9aa0a8;
+    --line-2: #aeb3ba;
+    --line-3: #c3c7cd;
+    --ink-3:  #4a4d54;
+    --ink-4:  #5a5d64;
+    --ink-5:  #6a6d74;
+    --pos-ink-4: #c2c5cb;
+    --pos-ink-5: #b0b3ba;
+    --pos-line:  #5a5d66;
+  }
+  .scan-panel, .pos-items, .secondary, .modal-card { border-width: 2px; }
+}
+
+/* ==========================================================================
+   IMPRESIÓN
+   ========================================================================== */
+
+@media print {
+  .pos-header, .pos-nav, .actions, .scan-panel, .cambios-panel,
+  .modal-overlay, #scanToastStack { display: none !important; }
+  .pos-grid { grid-template-columns: 1fr; padding: 0; }
+  .pos-cobro {
+    position: static;
+    max-height: none;
+    background: #fff;
+    color: #000;
+    border: 1px solid #000;
+  }
+  .pos-cobro .form-row > label,
+  .pos-cobro .cobro-linea > label,
+  .pos-cobro .cobro-total > label { color: #000; }
+  .pos-cobro .form-row input,
+  .pos-cobro .form-row select { background: #fff; color: #000; border-color: #999; }
+}

@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+    <!-- Fuera de los buscadores: noindex impide que Google indexe la pagina y
+         nofollow que siga sus enlaces. Debe quedar rastreable en robots.txt,
+         porque si se bloquea el crawleo Google nunca lee esta etiqueta. -->
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="googlebot" content="noindex, nofollow">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Ingreso de Pedido</title>
+  <link rel="icon" href="faviconnegro.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Hoja autónoma de esta pantalla. NO carga styles.css: esa hoja la comparten
+       otras 8 páginas del repo y no debe moverse por el rediseño de la caja. -->
+  <link rel="stylesheet" href="ingresoPedidoV2.css">
+  <!-- Agregar Select2 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+  <!-- Firebase SDKs (solo una vez, última versión) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="config.js"></script>
+  <!-- Agregar jQuery y Select2 JS -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+  <!-- QZ Tray: puente local para impresión ESC-POS (fuente nativa de la 3nStar RPT008) -->
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script>
+    // Inicializar Firebase solo una vez
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.database();
+
+    let authResolved = false;
+
+    function mostrarLogin() {
+      document.getElementById('loginOverlay').style.display = 'flex';
+      document.getElementById('mainContainer').style.display = 'none';
+      setTimeout(() => {
+        const el = document.getElementById('loginEmail');
+        if (el) el.focus();
+      }, 100);
+    }
+
+    function mostrarPanel() {
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('mainContainer').style.display = '';
+    }
+
+    function iniciarSesion() {
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      const btn = document.getElementById('loginSubmitBtn');
+      const errorDiv = document.getElementById('loginError');
+
+      if (!email || !password) {
+        mostrarErrorLogin('Por favor completa todos los campos');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Iniciando sesión...';
+      errorDiv.style.display = 'none';
+
+      firebase.auth().signInWithEmailAndPassword(email, password)
+        .catch(error => {
+          btn.disabled = false;
+          btn.textContent = 'Iniciar Sesión';
+          let msg = 'Error al iniciar sesión';
+          if (['auth/user-not-found', 'auth/wrong-password', 'auth/invalid-credential'].includes(error.code)) {
+            msg = 'Correo o contraseña incorrectos';
+          } else if (error.code === 'auth/too-many-requests') {
+            msg = 'Demasiados intentos. Intenta más tarde';
+          } else if (error.code === 'auth/invalid-email') {
+            msg = 'Correo electrónico inválido';
+          }
+          mostrarErrorLogin(msg);
+        });
+    }
+
+    function mostrarErrorLogin(msg) {
+      const errorDiv = document.getElementById('loginError');
+      errorDiv.textContent = msg;
+      errorDiv.style.display = 'block';
+    }
+
+    // Timeout de seguridad: mostrar login si auth no resuelve en 5s
+    setTimeout(() => {
+      if (!authResolved) mostrarLogin();
+    }, 5000);
+
+    firebase.auth().onAuthStateChanged(function(user) {
+      authResolved = true;
+      if (user) {
+        mostrarPanel();
+      } else {
+        mostrarLogin();
+      }
+    });
+
+    // Soporte Enter en inputs del login
+    document.addEventListener('DOMContentLoaded', function() {
+      ['loginEmail', 'loginPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('keypress', e => { if (e.key === 'Enter') iniciarSesion(); });
+      });
+    });
+  </script>
+</head>
+<body>
+
+  <!-- Login Overlay -->
+  <div id="loginOverlay" class="login-overlay" style="display:none;">
+    <div class="login-card">
+      <img src="logo.png" alt="HomePoint Logo" class="login-logo">
+      <h1 class="login-title">Panel de Control</h1>
+      <p class="login-subtitle">Inicia sesión para continuar</p>
+      <div id="loginError" class="login-error"></div>
+      <div class="login-form">
+        <input type="email" id="loginEmail" class="login-input" placeholder="Correo electrónico" autocomplete="email">
+        <input type="password" id="loginPassword" class="login-input" placeholder="Contraseña" autocomplete="current-password">
+        <button id="loginSubmitBtn" class="login-btn" onclick="iniciarSesion()">Iniciar Sesión</button>
+      </div>
+    </div>
+  </div>
+
+  <main id="mainContainer" class="container" style="display:none;">
+
+    <!-- ================= Cabecera ================= -->
+    <header class="pos-header">
+      <div class="pos-brand">
+        <img src="logo.png" alt="Logo" class="pos-logo">
+        <div class="pos-indicadores">
+          <div id="cotizacionDolar" class="pos-ind">
+            <span class="pos-ind-label">Cotización Dólar</span>
+            <span id="cotizacionValor" class="pos-ind-valor">Cargando...</span>
+          </div>
+          <div id="difUSD" class="pos-ind">
+            <span class="pos-ind-label">Dif % USD</span>
+            <span id="difUSDValor" class="pos-ind-valor">Cargando...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ojo: estos botones usan .secondary pero NO pueden vivir dentro de un
+           contenedor .actions — ingresoPedidoV2.js resuelve el botón Imprimir con
+           el selector `.actions button.secondary`. -->
+      <nav class="pos-nav" aria-label="Secciones">
+        <button type="button" id="cambiosModeBtn" class="secondary" title="Cambios y devoluciones (F4)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+          Cambios
+        </button>
+        <button type="button" id="whatsappModeBtn" class="secondary">Whatsapp</button>
+        <button type="button" id="adminModeBtn" class="secondary">Admin</button>
+        <a href="historialRecientes.html" id="historialBtn" class="secondary" target="_blank" rel="noopener">Historial</a>
+        <a href="ingresoPedidoV2.html" id="nuevoBtn" class="secondary nav-destacado">Nuevo</a>
+      </nav>
+    </header>
+
+    <form id="orderForm" autocomplete="off">
+      <div class="pos-grid">
+
+        <!-- ============ Columna de trabajo ============ -->
+        <div class="pos-work">
+
+          <!-- Panel de escaneo / búsqueda de artículos -->
+          <div id="searchArticulosContainer" class="scan-panel" data-estado="pausa">
+            <div class="scan-panel-head">
+              <span id="scanStatus" class="scan-status" role="status" aria-live="polite">
+                <span class="scan-status-dot" aria-hidden="true"></span>
+                <span id="scanStatusText">Escáner en pausa</span>
+              </span>
+              <span id="contadoresArticulos" class="scan-counters">
+                <span id="cantidadArticulos"><strong>0</strong> artículos</span>
+                <span class="scan-counters-sep" aria-hidden="true">·</span>
+                <span id="cantidadUnidades"><strong>0</strong> unidades</span>
+              </span>
+            </div>
+
+            <div class="scan-panel-row">
+              <div class="scan-input-wrap">
+                <svg class="scan-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M3 5v14M7 5v14M11 5v10M15 5v14M19 5v14" />
+                </svg>
+                <input
+                  type="text"
+                  id="searchInput"
+                  class="scan-input"
+                  placeholder="Escanee o ingrese el código de barras..."
+                  autocomplete="off"
+                  aria-label="Escanear o buscar artículo"
+                />
+                <div id="searchResults" class="scan-results" role="listbox"></div>
+              </div>
+
+              <input
+                type="number"
+                id="searchQuantity"
+                class="scan-qty-input"
+                min="1"
+                max="999"
+                value="1"
+                placeholder="1"
+                title="Cantidad"
+                aria-label="Cantidad"
+              />
+
+              <button
+                type="button"
+                id="addSearchItemBtn"
+                class="scan-add-btn"
+                title="Agregar artículo"
+                aria-label="Agregar artículo"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                Agregar
+              </button>
+
+              <button
+                type="button"
+                id="manualSearchBtn"
+                class="scan-manual-btn"
+                title="Habilitar búsqueda manual por nombre"
+                aria-label="Búsqueda manual"
+              >
+                <span id="manualSearchIcon">🔒</span>
+                <span id="manualSearchLabel">Búsqueda Manual</span>
+              </button>
+            </div>
+
+            <div id="scanNotFound" class="scan-notfound" role="alert">
+              <span>Sin coincidencias para</span>
+              <span id="scanNotFoundCode" class="scan-notfound-code"></span>
+              <button type="button" id="scanNotFoundBtn" class="scan-notfound-btn">Búsqueda Manual</button>
+            </div>
+            <div id="searchHelpText" class="scan-help"></div>
+          </div>
+
+          <!-- Panel de cambios y devoluciones -->
+          <section id="cambiosPanel" class="cambios-panel" hidden aria-labelledby="cambiosPanelTitle">
+            <div class="cambios-panel-head">
+              <h3 id="cambiosPanelTitle" class="cambios-panel-title">
+                <span aria-hidden="true">↩</span> Cambios y devoluciones
+              </h3>
+              <div class="cambios-panel-head-right">
+                <span id="cambiosVentana" class="cambios-chip">Últimos 15 días</span>
+                <button type="button" id="cambiosCerrarBtn" class="cambios-cerrar" title="Cerrar panel" aria-label="Cerrar panel de cambios">&times;</button>
+              </div>
+            </div>
+
+            <div class="cambios-buscador">
+              <div class="cambios-input-wrap">
+                <svg class="cambios-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8Z" />
+                  <path d="M9 6v12" stroke-dasharray="2 3" />
+                </svg>
+                <input
+                  type="text"
+                  id="cambiosBuscarInput"
+                  class="cambios-input"
+                  placeholder="Últimos 8 dígitos del ticket, ID completo o nombre del cliente"
+                  autocomplete="off"
+                  aria-label="Buscar el pedido original"
+                  aria-describedby="cambiosAyuda"
+                />
+                <div id="cambiosResultados" class="cambios-resultados" role="listbox" aria-label="Pedidos encontrados"></div>
+              </div>
+              <button type="button" id="cambiosAmpliarBtn" class="cambios-ampliar-btn" title="Repetir la búsqueda sobre todo el historial">Buscar en todo el historial</button>
+            </div>
+
+            <p id="cambiosAyuda" class="cambios-ayuda">
+              El número del ticket está impreso al pie del comprobante. Al elegir el pedido vas a ver
+              <strong>cuánto pagó el cliente</strong> por cada artículo.
+            </p>
+
+            <div id="cambiosOrigen" class="cambios-origen" hidden></div>
+          </section>
+
+          <!-- Artículos -->
+          <section class="section pos-items" aria-labelledby="articulos-title">
+            <h2 id="articulos-title" class="sr-only">Artículos</h2>
+            <table class="items-table" aria-label="Artículos de la Orden">
+              <thead>
+                <tr>
+                  <th>Img</th>
+                  <th>Código</th>
+                  <th>Artículo</th>
+                  <th>Cantidad</th>
+                  <th>Valor u</th>
+                  <th>Valor Total</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody id="itemsBody">
+                <!-- Filas dinámicas -->
+              </tbody>
+            </table>
+          </section>
+        </div>
+
+        <!-- ============ Columna de cobro ============ -->
+        <aside class="pos-cobro">
+
+          <!-- Datos del Cliente.
+               El atributo aria-labelledby es load-bearing: ingresoPedidoV2.js usa
+               `section[aria-labelledby="datos-cliente-title"]` como selector. -->
+          <section class="section cobro-cliente" aria-labelledby="datos-cliente-title">
+
+            <!-- "Cliente" hace de label a la izquierda del nombre (antes era un
+                 h2 apilado arriba): un renglón menos, mismo id para el aria-labelledby. -->
+            <div class="form-row cliente-row">
+              <h2 id="datos-cliente-title" class="cliente-row-label">Cliente</h2>
+              <label for="nombre" class="sr-only">Nombre</label>
+              <input type="text" id="nombre" name="nombre" maxlength="50" autocomplete="off" value="" placeholder="Nombre del cliente">
+            </div>
+
+            <!-- Los datos del cliente del pedido viajan sólo dentro del nodo
+                 "pedidos". El alta en el nodo "clientes" es explícita: la
+                 dispara el botón Registrar, nunca el flujo de la venta. -->
+            <div class="cliente-acciones">
+              <button type="button" id="cargarClienteBtn" class="cliente-btn cliente-btn-cargar">Cargar</button>
+              <button type="button" id="registrarClienteBtn" class="cliente-btn cliente-btn-registrar" title="Registrar este cliente en la base de clientes">Registrar</button>
+              <button type="button" id="editarClienteBtn" class="cliente-btn cliente-btn-editar" title="Completar o corregir los datos del cliente. Si está registrado, también actualiza su ficha">Editar</button>
+            </div>
+
+            <div class="form-row cliente-row">
+              <label for="direccion" class="sr-only">Info</label>
+              <input type="text" id="direccion" name="direccion" maxlength="100" autocomplete="street-address" placeholder="Info / dirección">
+            </div>
+
+            <!-- Teléfono, DNI y Email ya no se piden en el pedido: quedan ocultos y
+                 sin editar aquí (siguen viajando al modal de Registro/Editar cliente).
+                 El radio Tipo de Cliente sigue viviendo dentro, oculto, porque define
+                 qué precio (mayorista/consumidor final) se usa por artículo. -->
+            <div id="extraClienteFields" style="display:none;">
+              <div class="form-row">
+                <label for="telefono">Teléfono</label>
+                <input type="tel" id="telefono" name="telefono" maxlength="20" inputmode="tel" autocomplete="tel">
+              </div>
+              <div class="form-row">
+                <label for="dni">DNI</label>
+                <input type="text" id="dni" name="dni" maxlength="15" pattern="^\d{7,15}$" autocomplete="off">
+              </div>
+              <div class="form-row">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" maxlength="50" autocomplete="email">
+              </div>
+            </div>
+          </section>
+
+          <div class="pos-cobro-sep" aria-hidden="true"></div>
+
+          <!-- Resumen de la operación de cambio: solo visible cuando hay
+               devoluciones o garantías. La diferencia (a cobrar/a devolver) NO
+               se repite acá: ya se muestra en el Total Final del pie, que
+               ingresoPedidoV2.js actualiza con el mismo texto y valor. -->
+          <div id="cambioResumen" class="cambio-resumen" hidden role="status" aria-live="polite">
+            <div class="cambio-resumen-celda">
+              <span class="cambio-resumen-label">Devoluciones</span>
+              <span id="cambioResumenDevoluciones" class="cambio-resumen-valor negativo">$ 0</span>
+            </div>
+            <div class="cambio-resumen-celda">
+              <span class="cambio-resumen-label">Artículos nuevos</span>
+              <span id="cambioResumenVentas" class="cambio-resumen-valor positivo">$ 0</span>
+            </div>
+          </div>
+
+          <!-- Pagos -->
+          <section class="section cobro-pago" aria-labelledby="pagos-title">
+            <h2 id="pagos-title">Pago</h2>
+
+            <div class="form-row cobro-linea">
+              <label for="subtotal">Subtotal</label>
+              <input type="text" id="subtotal" name="subtotal" readonly>
+            </div>
+            <div class="form-row cobro-linea">
+              <label for="recargo">Recargo</label>
+              <div class="cobro-dual">
+                <input type="text" id="recargoPorcentaje" name="recargoPorcentaje" class="cobro-pct" inputmode="numeric" pattern="[0-9.]*" placeholder="%" aria-label="Recargo en porcentaje">
+                <input type="text" id="recargo" name="recargo" inputmode="numeric" pattern="[0-9.]*" value="0">
+              </div>
+            </div>
+            <div class="form-row cobro-linea">
+              <label for="descuento">Descuento</label>
+              <div class="cobro-dual">
+                <input type="text" id="descuentoPorcentaje" name="descuentoPorcentaje" class="cobro-pct" inputmode="numeric" pattern="[0-9.]*" placeholder="%" aria-label="Descuento en porcentaje">
+                <input type="text" id="descuento" name="descuento" inputmode="numeric" pattern="[0-9.]*" value="0">
+              </div>
+            </div>
+            <div class="form-row cobro-linea" style="display:none;">
+              <label for="envio">Costo de Envío</label>
+              <input type="text" id="envio" name="envio" inputmode="numeric" pattern="[0-9.]*" value="0">
+            </div>
+
+            <div class="form-row cobro-medio">
+              <label for="medioPago" id="medioPagoLabel">Medio de Pago*</label>
+              <select id="medioPago" name="medioPago">
+                <option value="">Seleccione</option>
+                <option value="Efectivo">Efectivo</option>
+                <!-- <option value="MercadoPago">MercadoPago</option> -->
+                <option value="Transferencia">Transferencia</option>
+                <option value="Debito">Débito</option>
+                <option value="Credito">Crédito</option>
+                <option value="Parcial">Parcial</option>
+                <option value="Sin cargo">Sin cargo</option>
+              </select>
+            </div>
+
+          </section>
+
+          <!-- Nota, vendedor y alias -->
+          <div class="cobro-extra">
+            <!-- La lista de vendedores la reescribe ingresoPedidoV2.js con el rango
+                 Vendedores!A:A de la planilla. Estas opciones son sólo el respaldo
+                 para cuando Google Sheets no responde: sin vendedor no se puede
+                 guardar el pedido, así que el desplegable nunca puede quedar vacío. -->
+            <div class="form-row">
+              <label for="vendedor">Vendedor</label>
+              <select id="vendedor" name="vendedor">
+                <option value="">Seleccione</option>
+                <option value="Hora">Hora</option>
+                <option value="Sabri">Sabri</option>
+                <option value="Javi">Javi</option>
+                <option value="Ale">Ale</option>
+                <option value="Leo">Leo</option>
+                <option value="User1">User1</option>
+                <option value="User2">User2</option>
+                <option value="WhatsApp">WhatsApp</option>
+              </select>
+            </div>
+            <div class="form-row" id="aliasRow" style="display: none;">
+              <label for="alias">ALIAS</label>
+              <input type="text" id="alias" name="alias" maxlength="50" style="text-transform: uppercase;">
+            </div>
+            <div class="form-row">
+              <label for="nota">Nota</label>
+              <input type="text" id="nota" name="nota" maxlength="200">
+            </div>
+          </div>
+
+          <div class="pos-cobro-spacer" aria-hidden="true"></div>
+
+          <!-- Pie de cobro: el importe y el botón de confirmar viajan juntos y
+               quedan anclados al piso del panel, así el total nunca se pierde
+               debajo del scroll cuando la venta tiene muchos renglones.
+               El JS reescribe #totalFinalLabel con innerHTML en cada recálculo:
+               nada estructural puede vivir dentro de ese label.
+               El botón Imprimir DEBE seguir siendo el primer `button.secondary`
+               dentro de `.actions` (ingresoPedidoV2.js:3757). -->
+          <div class="cobro-pie">
+            <div class="form-row cobro-total">
+              <label for="totalFinal" id="totalFinalLabel"><strong>Total Final</strong></label>
+              <input type="text" id="totalFinal" name="totalFinal" readonly>
+            </div>
+            <div class="actions">
+            <button type="button" id="calcCobroBtn" class="calc-btn" title="Calculadora de cobro" aria-label="Calculadora de cobro">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                <rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6"/>
+                <path d="M9 11h.01M12 11h.01M15 11h.01M9 15h.01M12 15h.01M15 15h.01M9 19h.01M12 19h.01M15 19h.01"/>
+              </svg>
+            </button>
+            <button type="submit" class="primary">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+              Ingresar Orden
+            </button>
+            <button type="button" class="secondary" style="display:none;">Imprimir</button>
+          </div>
+          </div>
+        </aside>
+      </div>
+    </form>
+
+    <div id="message" role="alert" aria-live="polite"></div>
+
+    <!-- Modal Calculadora de Cobro -->
+    <div id="calcCobroOverlay" class="modal-overlay" style="display:none;">
+      <div id="calcCobroModal" class="modal-card">
+        <h3 class="modal-titulo">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#6c4eb6" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6"/>
+            <path d="M9 11h.01M12 11h.01M15 11h.01M9 15h.01M12 15h.01M15 15h.01M9 19h.01M12 19h.01M15 19h.01"/>
+          </svg>
+          Calculadora de Cobro
+        </h3>
+        <div class="calc-destacado">
+          <div class="calc-destacado-label">Total a cobrar</div>
+          <div id="calcTotal" class="calc-destacado-valor">$0</div>
+        </div>
+        <div>
+          <label for="calcAbona" class="calc-campo-label">Abona el cliente</label>
+          <input type="text" id="calcAbona" class="calc-input" inputmode="numeric" placeholder="Ingrese monto...">
+        </div>
+        <div id="calcVueltoContainer" class="calc-resultado calc-resultado-vuelto">
+          <div class="calc-resultado-label">Vuelto</div>
+          <div id="calcVuelto" class="calc-resultado-valor">$0</div>
+        </div>
+        <div id="calcFaltaContainer" class="calc-resultado calc-resultado-falta">
+          <div class="calc-resultado-label">Falta</div>
+          <div id="calcFalta" class="calc-resultado-valor">$0</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function() {
+      const overlay = document.getElementById('calcCobroOverlay');
+      const modal = document.getElementById('calcCobroModal');
+      const abonaInput = document.getElementById('calcAbona');
+      const vueltoContainer = document.getElementById('calcVueltoContainer');
+      const faltaContainer = document.getElementById('calcFaltaContainer');
+      const vueltoEl = document.getElementById('calcVuelto');
+      const faltaEl = document.getElementById('calcFalta');
+      const totalEl = document.getElementById('calcTotal');
+
+      function parseNumber(str) {
+        if (!str) return 0;
+        return parseInt(str.replace(/\D/g, ''), 10) || 0;
+      }
+
+      function formatNumber(n) {
+        return '$' + Math.round(n).toLocaleString('es-AR').replace(/,/g, '.');
+      }
+
+      function formatInputMiles(input) {
+        const num = parseNumber(input.value);
+        if (num > 0) {
+          const pos = input.selectionStart;
+          const lenAntes = input.value.length;
+          input.value = '$' + num.toLocaleString('es-AR').replace(/,/g, '.');
+          const lenDespues = input.value.length;
+          input.setSelectionRange(pos + (lenDespues - lenAntes), pos + (lenDespues - lenAntes));
+        } else {
+          input.value = '';
+        }
+      }
+
+      function abrirCalcCobro() {
+        const totalFinal = parseNumber(document.getElementById('totalFinal').value);
+        totalEl.textContent = formatNumber(totalFinal);
+        abonaInput.value = '';
+        vueltoContainer.style.display = 'none';
+        faltaContainer.style.display = 'none';
+        overlay.style.display = 'flex';
+        setTimeout(() => abonaInput.focus(), 100);
+      }
+
+      function cerrarCalcCobro() {
+        overlay.style.display = 'none';
+      }
+
+      function calcularVuelto() {
+        const totalFinal = parseNumber(document.getElementById('totalFinal').value);
+        formatInputMiles(abonaInput);
+        const abona = parseNumber(abonaInput.value);
+        if (!abona) {
+          vueltoContainer.style.display = 'none';
+          faltaContainer.style.display = 'none';
+          return;
+        }
+        const diff = abona - totalFinal;
+        if (diff >= 0) {
+          vueltoEl.textContent = formatNumber(diff);
+          vueltoContainer.style.display = 'block';
+          faltaContainer.style.display = 'none';
+        } else {
+          faltaEl.textContent = formatNumber(Math.abs(diff));
+          faltaContainer.style.display = 'block';
+          vueltoContainer.style.display = 'none';
+        }
+      }
+
+      document.getElementById('calcCobroBtn').addEventListener('click', abrirCalcCobro);
+
+      overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) cerrarCalcCobro();
+      });
+
+      abonaInput.addEventListener('input', calcularVuelto);
+
+      abonaInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') cerrarCalcCobro();
+      });
+    })();
+    </script>
+
+  </main>
+
+  <!-- Modal contraseña Admin -->
+  <div id="adminPassOverlay" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <h3 id="adminPassTitle" class="modal-titulo">Acceso Administrador</h3>
+      <div id="adminPassError" class="modal-error">Contraseña incorrecta</div>
+      <input type="password" id="adminPassInput" class="modal-input" placeholder="Contraseña">
+      <div class="modal-acciones">
+        <button type="button" id="adminPassCancelBtn" class="modal-btn-sec">Cancelar</button>
+        <button type="button" id="adminPassConfirmBtn" class="modal-btn-pri">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal confirmación de cambio / devolución -->
+  <div id="confirmarCambioOverlay" class="modal-overlay" style="display:none; z-index:10001;">
+    <div class="confirmar-cambio-modal" role="dialog" aria-modal="true" aria-labelledby="confirmarCambioTitulo">
+      <h3 id="confirmarCambioTitulo" class="confirmar-cambio-titulo">Confirmar cambio</h3>
+      <p class="confirmar-cambio-sub">Esta operación modifica el inventario. Revisá el detalle antes de registrarla.</p>
+
+      <div id="confirmarCambioMovs" class="confirmar-cambio-movs"></div>
+
+      <dl class="confirmar-cambio-datos">
+        <div><dt>Pedido original</dt><dd id="confirmarCambioOrigen">—</dd></div>
+        <div><dt id="confirmarCambioImporteLabel">A cobrar</dt><dd id="confirmarCambioImporte">$ 0</dd></div>
+        <div><dt>Medio de pago</dt><dd id="confirmarCambioMedio">—</dd></div>
+      </dl>
+
+      <div class="confirmar-cambio-acciones">
+        <button type="button" id="confirmarCambioCancelBtn" class="confirmar-cambio-btn-sec">Cancelar</button>
+        <button type="button" id="confirmarCambioOkBtn" class="confirmar-cambio-btn-pri">Confirmar cambio</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal contraseña Búsqueda Manual -->
+  <div id="manualPassOverlay" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <h3 class="modal-titulo">Búsqueda Manual</h3>
+      <p class="modal-sub">Ingrese la contraseña para buscar por nombre sin usar el código de barras.</p>
+      <div id="manualPassError" class="modal-error">Contraseña incorrecta</div>
+      <input type="password" id="manualPassInput" class="modal-input" placeholder="Contraseña">
+      <div class="modal-acciones">
+        <button type="button" id="manualPassCancelBtn" class="modal-btn-sec">Cancelar</button>
+        <button type="button" id="manualPassConfirmBtn" class="modal-btn-pri">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="ingresoPedidoV2.js"></script>
+</body>
+</html>

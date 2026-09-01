@@ -2,10 +2,20 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+    <!-- Fuera de los buscadores: noindex impide que Google indexe la pagina y
+         nofollow que siga sus enlaces. Debe quedar rastreable en robots.txt,
+         porque si se bloquea el crawleo Google nunca lee esta etiqueta. -->
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="googlebot" content="noindex, nofollow">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Pedidos del Día</title>
   <link rel="icon" href="faviconnegro.png" type="image/png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Esta pantalla NO carga styles.css: comparte lenguaje visual con
+       ingresoPedidoV2.css (mismos tokens, tipografía y gestos) y esa hoja
+       compartida no debe moverse por el rediseño de la caja. -->
   <!-- Firebase Auth Check -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -249,6 +259,24 @@
       document.getElementById('filtroNombre').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') aplicarFiltros();
       });
+
+      // Doble clic sobre un medio del desglose = ver solo esos pagos. El
+      // listener va en el contenedor porque los ítems se redibujan en cada
+      // render. Enter/Espacio hacen lo mismo para quien navega con teclado.
+      const desglose = document.getElementById('hdrDesglose');
+      if (desglose) {
+        desglose.addEventListener('dblclick', function(e) {
+          const item = e.target.closest('.medio-item');
+          if (item) toggleFiltroMedio(item.dataset.medio);
+        });
+        desglose.addEventListener('keydown', function(e) {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          const item = e.target.closest('.medio-item');
+          if (!item) return;
+          e.preventDefault();
+          toggleFiltroMedio(item.dataset.medio);
+        });
+      }
     });
 
     // === PAGINACIÓN ===
@@ -257,6 +285,17 @@
     // 30 filas por página, evitando construir cientos de nodos del DOM de una.
     const PAGE_SIZE = 30;
     let paginaActual = 1;
+    // Filtro por medio de pago (slug), lo activa el doble clic en el desglose
+    // de la cabecera. Vacío = sin filtro.
+    let filtroMedio = '';
+
+    function toggleFiltroMedio(slug) {
+      if (!slug) return;
+      // Volver a marcar el mismo medio lo apaga: el doble clic es un interruptor.
+      filtroMedio = (filtroMedio === slug) ? '' : slug;
+      paginaActual = 1;
+      renderPedidos();
+    }
 
     function renderPedidos() {
       const tbody = document.getElementById('pedidosBody');
@@ -266,8 +305,14 @@
       // Los registros ya vienen filtrados por fecha de hoy y createdby = admin desde Firebase
       let keys = Object.keys(pedidos).reverse();
 
+      renderIndicadores(keys);
+
       if (filtroNombre) {
         keys = keys.filter(id => (pedidos[id].cliente?.nombre || '').toLowerCase().includes(filtroNombre));
+      }
+
+      if (filtroMedio) {
+        keys = keys.filter(id => slugMedio((pedidos[id].pagos || {}).medioPago) === filtroMedio);
       }
 
       const totalRegistros = keys.length;
@@ -277,7 +322,7 @@
       if (paginaActual < 1) paginaActual = 1;
 
       if (totalRegistros === 0) {
-        tbody.innerHTML = '<tr><td colspan="7">No hay pedidos del día de hoy que coincidan con los filtros.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="tabla-vacia">No hay pedidos del día de hoy que coincidan con los filtros.</td></tr>';
         renderPaginacion(0, 1, 1);
         return;
       }
@@ -289,35 +334,128 @@
       // sola vez (un único reflow), en lugar de reconcatenar innerHTML por fila.
       const filas = keysPagina.map(id => {
         const p = pedidos[id];
-        const fecha = p.fecha || '';
         const cliente = p.cliente || {};
         const vendedor = p.vendedor || 'No asignado';
         const isCancelado = (p.status || '').toUpperCase() === 'CANCELADO';
         const pagos = p.pagos || {};
+        // Todas las filas son del día de hoy: la hora es el dato que ordena la
+        // lectura; la fecha queda como línea secundaria para no perder contexto.
+        const hora = p.timestamp
+          ? new Date(p.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false })
+          : '—';
+        // p.fecha puede traer la hora pegada ('2026-08-26 14:32:05'): se corta
+        // el sello de tiempo para que la celda no arme un tercer renglón.
+        const fechaSolo = String(p.fecha || '').trim().split(/[ T]/)[0];
         // totalFinal y subtotal pueden ser string o number, se fuerza a number si es posible
         const totalFinal = pagos.totalFinal !== undefined ? `$${Number(pagos.totalFinal).toLocaleString('es-AR', {maximumFractionDigits:0})}` : '';
         const medioPagoNorm = (pagos.medioPago || '').toString().trim().toLowerCase();
+        // Slug sin acentos para la clase del chip (débito -> debito)
+        const medioPagoSlug = medioPagoNorm.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '');
         const waHabilitado = medioPagoNorm === 'transferencia' || medioPagoNorm === 'parcial';
+        // La calculadora de vuelto solo tiene sentido cobrando en efectivo
+        const calcHabilitado = medioPagoNorm === 'efectivo';
         return `
-          <tr${isCancelado ? ' style="background:#e0e0e0;color:#888;"' : ''}>
-            <td>${fecha}</td>
-            <td style="cursor:pointer;text-decoration:underline;color:#2a3d8f;" onclick="verPedido('${id}')">${cliente.nombre || ''}</td>
-            <td style="max-width:180px;white-space:pre-wrap;word-break:break-word;">${p.nota || ''}</td>
-            <td>${totalFinal}</td>
-            <td>${pagos.medioPago || ''}</td>
-            <td>${vendedor}</td>
+          <tr${isCancelado ? ' class="row-cancelado"' : ''}>
+            <td class="col-hora"><span class="hora">${hora}</span><span class="fecha-sub">${fechaSolo}</span></td>
             <td>
-              <button onclick="abrirModalWhatsapp('${id}')" style="background:${waHabilitado ? '#25D366' : '#ccc'};padding:6px 10px;${waHabilitado ? '' : 'cursor:not-allowed;'}" title="${waHabilitado ? 'WhatsApp' : 'Solo disponible para pagos por transferencia o parcial'}"${waHabilitado ? '' : ' disabled'}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg></button>
-              <button onclick="verPedido('${id}')" style="background:#2a3d8f;padding:6px 10px;" title="Ver pedido"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></button>
-              <button onclick="imprimirPedido('${id}')" style="background:#555;padding:6px 10px;" title="Imprimir"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/><path d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 10a1 1 0 0 1-1-1V9h8v3a1 1 0 0 1-1 1H5z"/></svg></button>
-              <button onclick="cancelarPedido('${id}')" style="background:${isCancelado ? '#ccc' : '#f44336'};padding:6px 10px;${isCancelado ? 'cursor:not-allowed;' : ''}" title="Cancelar"${isCancelado ? ' disabled' : ''}><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="white" viewBox="0 0 16 16" style="vertical-align:middle;"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8z"/></svg></button>
+              <button type="button" class="link-cliente" onclick="verPedido('${id}')" title="Abrir pedido">${cliente.nombre || 'Sin nombre'}</button>
+              ${isCancelado ? '<span class="badge-cancelado">Cancelado</span>' : ''}
             </td>
-            </tr>
+            <td class="col-nota"><span class="nota-txt">${p.nota || ''}</span></td>
+            <td class="col-total">${totalFinal}</td>
+            <td>${pagos.medioPago ? `<span class="chip-pago chip-pago--${medioPagoSlug}">${pagos.medioPago}</span>` : ''}</td>
+            <td class="col-vendedor">${vendedor}</td>
+            <td>
+              <div class="acciones">
+              <button class="icon-btn icon-btn--wa" onclick="abrirModalWhatsapp('${id}')" title="${waHabilitado ? 'Enviar alias por WhatsApp' : 'Solo disponible para pagos por transferencia o parcial'}" aria-label="WhatsApp"${waHabilitado ? '' : ' disabled'}><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg></button>
+              <button class="icon-btn icon-btn--calc" onclick="abrirCalcCobro('${id}')" title="${calcHabilitado ? 'Calculadora de cobro' : 'Solo disponible para pagos en efectivo'}" aria-label="Calculadora de cobro"${calcHabilitado ? '' : ' disabled'}><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6"/><path d="M9 11h.01M12 11h.01M15 11h.01M9 15h.01M12 15h.01M15 15h.01M9 19h.01M12 19h.01M15 19h.01"/></svg></button>
+              <button class="icon-btn icon-btn--ver" onclick="verPedido('${id}')" title="Ver pedido" aria-label="Ver pedido"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></button>
+              <button class="icon-btn icon-btn--print" onclick="imprimirPedido('${id}')" title="Imprimir ticket" aria-label="Imprimir"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.5 8a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/><path d="M5 1a2 2 0 0 0-2 2v2H2a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1V3a2 2 0 0 0-2-2H5zM4 3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2H4V3zm1 10a1 1 0 0 1-1-1V9h8v3a1 1 0 0 1-1 1H5z"/></svg></button>
+              <button class="icon-btn icon-btn--danger" onclick="cancelarPedido('${id}')" title="${isCancelado ? 'El pedido ya está cancelado' : 'Cancelar pedido'}" aria-label="Cancelar pedido"${isCancelado ? ' disabled' : ''}><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8z"/></svg></button>
+              </div>
+            </td>
+          </tr>
         `;
       });
       tbody.innerHTML = filas.join('');
 
       renderPaginacion(totalRegistros, paginaActual, totalPaginas);
+    }
+
+    // Pulso del día en la cabecera: cantidad de pedidos vigentes y lo facturado.
+    // Se calcula sobre todos los pedidos descargados (no sobre el filtro) y
+    // deja fuera los cancelados, que no suman al total del día.
+    // Orden fijo del desglose: el cajero busca siempre en el mismo lugar.
+    const ORDEN_MEDIOS = ['efectivo', 'transferencia', 'debito', 'credito', 'parcial', 'sincargo'];
+
+    // Slug sin acentos ni espacios (Débito -> debito, "Sin cargo" -> sincargo)
+    function slugMedio(txt) {
+      return (txt || '').toString().normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z]/g, '');
+    }
+
+    // totalFinal puede venir number o string en formato es-AR
+    function montoPedido(pagos) {
+      const bruto = (pagos || {}).totalFinal;
+      const n = typeof bruto === 'number'
+        ? bruto
+        : parseFloat(String(bruto || '').replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+      return isNaN(n) ? 0 : n;
+    }
+
+    const pesos = (n) => '$' + Math.round(n).toLocaleString('es-AR');
+
+    function renderIndicadores(keys) {
+      const elPedidos = document.getElementById('hdrPedidos');
+      const elFacturado = document.getElementById('hdrFacturado');
+      const elDesglose = document.getElementById('hdrDesglose');
+      if (!elPedidos || !elFacturado) return;
+
+      let vigentes = 0;
+      let facturado = 0;
+      // clave = slug del medio; conserva la etiqueta tal cual la guardó el pedido
+      const porMedio = new Map();
+
+      keys.forEach(id => {
+        const p = pedidosCache[id] || {};
+        if ((p.status || '').toUpperCase() === 'CANCELADO') return;
+        vigentes++;
+        const monto = montoPedido(p.pagos);
+        facturado += monto;
+
+        const etiqueta = ((p.pagos || {}).medioPago || '').toString().trim() || 'Sin especificar';
+        const slug = slugMedio(etiqueta) || 'otro';
+        const acum = porMedio.get(slug) || { etiqueta: etiqueta, monto: 0, pedidos: 0 };
+        acum.monto += monto;
+        acum.pedidos++;
+        porMedio.set(slug, acum);
+      });
+
+      elPedidos.textContent = vigentes;
+      elFacturado.textContent = pesos(facturado);
+
+      if (!elDesglose) return;
+      const filas = [...porMedio.entries()]
+        .filter(([, v]) => Math.round(v.monto) !== 0)
+        .sort((a, b) => {
+          const ia = ORDEN_MEDIOS.indexOf(a[0]);
+          const ib = ORDEN_MEDIOS.indexOf(b[0]);
+          if (ia !== ib) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+          return b[1].monto - a[1].monto;
+        });
+
+      elDesglose.innerHTML = filas.map(([slug, v]) => {
+        const plural = v.pedidos === 1 ? 'pedido' : 'pedidos';
+        const activo = filtroMedio === slug;
+        const ayuda = activo
+          ? `Doble clic para quitar el filtro · ${v.pedidos} ${plural}`
+          : `Doble clic para ver solo ${v.etiqueta} · ${v.pedidos} ${plural}`;
+        return `<button type="button" class="medio-item" data-medio="${slug}" aria-pressed="${activo}" title="${ayuda}">` +
+               `<span class="medio-label">${v.etiqueta}</span>` +
+               `<span class="medio-valor">${pesos(v.monto)}</span></button>`;
+      }).join('');
     }
 
     // Dibuja la barra de paginación (info + botones anterior/siguiente)
@@ -333,20 +471,27 @@
       const prevDisabled = pagina <= 1;
       const nextDisabled = pagina >= totalPaginas;
       cont.innerHTML = `
-        <span style="color:#444;font-size:0.9rem;">Mostrando ${desde}-${hasta} de ${totalRegistros}</span>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button onclick="paginaAnterior()" style="background:${prevDisabled ? '#ccc' : '#39373f'};${prevDisabled ? 'cursor:not-allowed;' : ''}"${prevDisabled ? ' disabled' : ''}>‹ Anterior</button>
-          <span style="color:#444;font-size:0.9rem;">Página ${pagina} de ${totalPaginas}</span>
-          <button onclick="paginaSiguiente()" style="background:${nextDisabled ? '#ccc' : '#39373f'};${nextDisabled ? 'cursor:not-allowed;' : ''}"${nextDisabled ? ' disabled' : ''}>Siguiente ›</button>
+        <span class="paginacion-info">Mostrando ${desde}-${hasta} de ${totalRegistros}</span>
+        <div class="paginacion-nav">
+          <button type="button" class="secondary" onclick="paginaAnterior()"${prevDisabled ? ' disabled' : ''}>‹ Anterior</button>
+          <span class="paginacion-pag">Página ${pagina} de ${totalPaginas}</span>
+          <button type="button" class="secondary" onclick="paginaSiguiente()"${nextDisabled ? ' disabled' : ''}>Siguiente ›</button>
         </div>
       `;
     }
 
+    // El listado scrollea dentro de .card-tabla-scroll: al pasar de página hay
+    // que volver ese contenedor arriba, no sólo la ventana.
+    function volverArribaListado() {
+      const cont = document.querySelector('.card-tabla-scroll');
+      if (cont) cont.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
     function paginaAnterior() {
-      if (paginaActual > 1) { paginaActual--; renderPedidos(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+      if (paginaActual > 1) { paginaActual--; renderPedidos(); volverArribaListado(); }
     }
     function paginaSiguiente() {
-      paginaActual++; renderPedidos(); window.scrollTo({ top: 0, behavior: 'smooth' });
+      paginaActual++; renderPedidos(); volverArribaListado();
     }
 
     function aplicarFiltros() {
@@ -355,11 +500,12 @@
     }
     function limpiarFiltros() {
       document.getElementById('filtroNombre').value = '';
+      filtroMedio = '';
       paginaActual = 1;
       renderPedidos();
     }
     function verPedido(id) {
-      window.open(`ingresoPedido.html?id=${id}`, '_blank');
+      window.open(`ingresoPedidoV2.html?id=${id}`, '_blank');
     }
     
     // ====================================================================
@@ -900,78 +1046,762 @@ swiTwxojtYcW2WoyuWXzJClYn1id6V+kpFuDiLDJjg6ngdeXvZ9BHRY8J/eWe1JE
     }
   </script>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; background: #f1f1f1; }
-    main { max-width: 1000px; margin: 30px auto; background: #fff; border-radius: 8px; padding: 24px; }
-    header {background: linear-gradient(90deg, #5c5866, #989899); padding: 1.5rem 1rem 1.5rem 1rem; box-shadow: #5c5866 0px 2px 8px 0px; text-align: center;}
-    header h1 {margin: 0; font-size: 2.2rem; color: #39373f; letter-spacing: 1px; font-weight: 700;}
-    table { width: 100%; min-width: 1000px; border-collapse: collapse; margin-top: 20px; background: #fff; }
-    th, td { padding: 10px; border: 1px solid #ddd; text-align: center; }
-    th { background: #5c5866; color: #fff; }
-    tr:nth-child(even) { background: #f9f9f9; }
-    button { margin: 0 2px; padding: 6px 12px; border-radius: 4px; border: none; background: #f44336; color: #fff; cursor: pointer; }
-    button:hover { background: #d8382c; }
-    #filtroNombre {
-      width: 220px;
+    /* ======================================================================
+       historialRecientes.html — hoja autónoma, alineada a ingresoPedidoV2.css
+       ----------------------------------------------------------------------
+       Historial y terminal de cobro se usan en la misma sesión de caja: mismos
+       tokens, misma tipografía, mismos gestos. Cualquier cambio de paleta acá
+       tiene que espejarse en ingresoPedidoV2.css y viceversa.
+       ====================================================================== */
+
+    /* ------------------------------------------------------------ tokens -- */
+    :root {
+      --bg:        #f4f5f7;
+      --surface:   #ffffff;
+      --surface-2: #fafbfc;
+      --line:      #dde0e5;
+      --line-2:    #e7e9ed;
+      --line-3:    #f0f1f4;
+
+      --ink:   #1a1c20;
+      --ink-2: #43464e;
+      --ink-3: #6e7178;
+      --ink-4: #8a8d95;
+      --ink-5: #a3a6ae;
+
+      --pos:   #17181c;
+      --pos-2: #202228;
+
+      --violeta:       #6c4eb6;
+      --violeta-2:     #5a3da0;
+      --violeta-soft:  rgba(108, 78, 182, .12);
+      --violeta-ring:  rgba(108, 78, 182, .28);
+      --violeta-line:  #cdc0ea;
+      --verde:         #16803d;
+      --verde-bg:      #ecfdf3;
+      --verde-line:    #bbe7cd;
+      --wa:            #128c4a;
+      --wa-bg:         #e9f9f0;
+      --wa-line:       #9fe0bd;
+      --azul:          #2a3d8f;
+      --azul-bg:       #eef1fb;
+      --azul-line:     #c3ccee;
+      --ambar:         #b45309;
+      --ambar-bg:      #fffbeb;
+      --ambar-line:    #fde4b0;
+      --rojo:          #dc2626;
+      --rojo-bg:       #fef2f2;
+      --rojo-line:     #f6c6c6;
+
+      --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+      --s5: 20px; --s6: 24px; --s7: 32px;
+
+      --r1: 7px; --r2: 10px; --r3: 14px;
+      --h-sm: 38px; --h-md: 44px; --h-lg: 52px;
+      --header-h: 70px;
+
+      --font: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system,
+              'Segoe UI', Roboto, sans-serif;
+
+      --shadow-2: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .04);
+      --shadow-modal: 0 24px 48px rgba(15, 23, 42, .22);
+
+      /* Springs cortos, sin rebote: es una herramienta de trabajo. */
+      --t-fast: 100ms cubic-bezier(.2, 0, .2, 1);
+      --t-base: 160ms cubic-bezier(.2, 0, .2, 1);
+      --t-slow: 220ms cubic-bezier(.2, 0, .2, 1);
+    }
+
+    /* -------------------------------------------------------------- base -- */
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    button, input, select, textarea { font-family: inherit; }
+
+    /* Cifras alineadas en columna: los importes no pueden bailar al recalcular. */
+    .col-total, .col-hora .hora, .chip-hdr-valor,
+    .calc-destacado-valor, .calc-resultado-valor, .calc-input,
+    .paginacion-info { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+    ::selection { background: var(--violeta-soft); }
+
+    :focus-visible { outline: 3px solid var(--violeta-ring); outline-offset: 1px; }
+
+    .sr-only {
+      position: absolute; width: 1px; height: 1px;
+      padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0 0 0 0); clip-path: inset(50%);
+      white-space: nowrap; border: 0;
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ------------------------------------------------------------ header -- */
+    .pos-header {
+      position: sticky;
+      top: 0;
+      z-index: 120;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--s3) var(--s6);
+      min-height: var(--header-h);
+      /* La barra sigue siendo full-bleed, pero su contenido se alinea con el
+         borde de main para que cabecera y tabla compartan el mismo eje. */
+      padding: var(--s3) max(var(--s5), calc((100vw - 1332px) / 2));
+      background: rgba(244, 245, 247, .84);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      box-shadow: 0 1px 0 rgba(26, 28, 32, .07), 0 6px 16px -12px rgba(16, 24, 40, .3);
+    }
+
+    /* El desglose puede sumar 4-5 chips: la cabecera envuelve en vez de
+       desbordar en la tablet apaisada de 1024-1280px. */
+    .pos-brand { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s3) var(--s5); min-width: 0; }
+    .pos-logo { height: 30px; width: auto; display: block; flex-shrink: 0; }
+
+    .pos-titulo {
+      display: flex; flex-direction: column; gap: 1px;
+      padding-left: var(--s5); border-left: 1px solid var(--line); line-height: 1.2;
+    }
+    .pos-titulo-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-4);
+    }
+    .pos-titulo-valor {
+      font-size: 17px; font-weight: 600; letter-spacing: -.015em; color: var(--ink);
+    }
+
+    .pos-indicadores {
+      display: flex; align-items: center; gap: var(--s5);
+      padding-left: var(--s5); border-left: 1px solid var(--line);
+    }
+    .pos-ind { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; }
+    .pos-ind-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .07em;
+      text-transform: uppercase; color: var(--ink-4); white-space: nowrap;
+    }
+    .chip-hdr-valor {
+      font-size: 14px; font-weight: 600; color: var(--ink-2); white-space: nowrap;
+    }
+
+    /* Desglose por medio de pago: es un dato de apoyo, no un tablero. Usa la
+       misma anatomía que los indicadores de al lado (rótulo arriba, cifra
+       abajo) pero un escalón más apagado, sin color ni cápsulas. */
+    .hdr-desglose {
+      display: flex; align-items: center; flex-wrap: wrap; gap: var(--s1) var(--s3);
+      padding-left: var(--s3); border-left: 1px solid var(--line);
+    }
+    .hdr-desglose:empty { display: none; }
+
+    /* Cada medio es un interruptor: doble clic filtra la tabla por ese pago.
+       Se dibuja como texto plano, sin aire de botón, hasta que el puntero
+       encima o el estado activo lo delatan. */
+    .medio-item {
+      display: flex; flex-direction: column; gap: 1px;
+      line-height: 1.2; text-align: left;
+      margin: 0; padding: 3px var(--s2);
+      background: none; border: none; border-radius: var(--r1);
+      font: inherit; cursor: pointer;
+      -webkit-user-select: none; user-select: none;
+    }
+    .medio-item:hover { background: var(--line-3); }
+    .medio-item[aria-pressed="true"] { background: var(--violeta-soft); }
+    .medio-item[aria-pressed="true"] .medio-label,
+    .medio-item[aria-pressed="true"] .medio-valor { color: var(--violeta); }
+
+    .medio-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .07em;
+      text-transform: uppercase; color: var(--ink-5); white-space: nowrap;
+      transition: color var(--t-base);
+    }
+    .medio-valor {
+      font-size: 13px; font-weight: 600; color: var(--ink-3);
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+      transition: color var(--t-base);
+    }
+
+    .pos-nav { display: flex; align-items: center; gap: var(--s2); flex-shrink: 0; }
+
+    /* ----------------------------------------------------------- botones -- */
+    button, a.secondary {
+      transition: background var(--t-base), color var(--t-base),
+                  border-color var(--t-base), box-shadow var(--t-base),
+                  transform var(--t-fast);
+    }
+    /* Feedback en pointer-down, no en click. */
+    button:active:not(:disabled), a.secondary:active { transform: scale(.975); }
+
+    .secondary {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: var(--s2);
+      min-height: var(--h-md);
+      padding: 0 var(--s4);
+      background: var(--surface);
+      color: var(--ink-2);
+      border: 1px solid var(--line);
+      border-radius: var(--r2);
+      font-size: 14px; font-weight: 500;
+      text-decoration: none; cursor: pointer; white-space: nowrap;
+    }
+    .secondary:hover:not(:disabled) { background: var(--surface-2); border-color: #cdd1d8; }
+    .secondary:disabled { opacity: .5; cursor: not-allowed; }
+
+    .nav-destacado {
+      background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600;
+    }
+    .nav-destacado:hover { background: #000; border-color: #000; }
+
+    .primary {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: var(--s2);
+      min-height: var(--h-md);
+      padding: 0 var(--s5);
+      background: var(--violeta);
+      color: #fff; border: none; border-radius: var(--r2);
+      font-size: 14.5px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 6px 18px -6px rgba(108, 78, 182, .45);
+    }
+    .primary:hover:not(:disabled) { background: var(--violeta-2); }
+
+    /* ------------------------------------------------------------ layout -- */
+    main {
+      /* 1332px de caja = 1290px de tabla (15% menos que los 1518px previos) */
+      max-width: 1332px;
+      margin: 0 auto;
+      padding: var(--s4) var(--s5) var(--s7);
+      display: flex; flex-direction: column; gap: var(--s4);
+    }
+
+    /* ----------------------------------------------------------- toolbar -- */
+    .toolbar {
+      display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+    }
+
+    .toolbar-search { position: relative; flex: 0 1 380px; min-width: 220px; }
+    .toolbar-search-icon {
+      position: absolute; left: var(--s3); top: 50%; transform: translateY(-50%);
+      width: 17px; height: 17px; color: var(--ink-4); pointer-events: none;
+    }
+    .toolbar-input {
+      width: 100%;
+      height: var(--h-md);
+      padding: 0 var(--s3) 0 42px;
+      border: 1px solid var(--line);
+      border-radius: var(--r2);
+      background: var(--surface);
+      font-size: 14.5px; color: var(--ink);
+      transition: border-color var(--t-base), box-shadow var(--t-base);
+    }
+    .toolbar-input::placeholder { color: var(--ink-5); }
+    .toolbar-input:focus {
+      outline: none; border-color: var(--violeta);
+      box-shadow: 0 0 0 3px var(--violeta-soft);
+    }
+
+    /* ------------------------------------------------------------- tabla -- */
+    .card-tabla {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--r3);
+      box-shadow: var(--shadow-2);
+      overflow: hidden;
+    }
+    /* Contenedor de scroll real (x e y): el thead sticky se pega contra este
+       elemento, no contra el viewport. Así el encabezado no se pierde al
+       recorrer las 30 filas de la página y el paginador queda siempre visible. */
+    .card-tabla-scroll {
+      overflow: auto;
+      max-height: calc(100vh - 236px);
+      min-height: 220px;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: #cdd1d8 transparent;
+    }
+    .card-tabla-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+    .card-tabla-scroll::-webkit-scrollbar-thumb { background: #cdd1d8; border-radius: 999px; border: 3px solid var(--surface); }
+
+    .tabla {
+      width: 100%;
+      min-width: 900px;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+    }
+
+    .tabla th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      height: 42px;
+      padding: 0 var(--s4);
+      background: var(--surface-2);
+      border: none;
+      border-bottom: 1px solid var(--line-2);
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--ink-4);
+      text-align: left; white-space: nowrap;
+    }
+
+    /* Reparto de ancho por prioridad de lectura:
+       Cliente es la única columna elástica (se queda con el sobrante), Nota
+       está acotada por porcentaje y es la primera en ceder al angostar la
+       ventana, y el resto son anchos fijos para que las cifras y los botones
+       no se muevan al cambiar de página. */
+    .tabla th:nth-child(1) { width: 96px; }
+    .tabla th:nth-child(2) { width: auto; }
+    .tabla th:nth-child(3) { width: 20%; }
+    .tabla th:nth-child(4) { width: 128px; text-align: right; }
+    .tabla th:nth-child(5) { width: 138px; }
+    .tabla th:nth-child(6) { width: 124px; }
+    .tabla th:nth-child(7) { width: 214px; text-align: right; }
+
+    .tabla td {
+      padding: var(--s3) var(--s4);
+      border: none;
+      border-bottom: 1px solid var(--line-3);
+      vertical-align: middle;
+      font-size: 14.5px;
+      color: var(--ink-2);
+    }
+    .tabla tbody tr { background: var(--surface); transition: background var(--t-fast); }
+    .tabla tbody tr:hover { background: var(--surface-2); }
+    .tabla tbody tr:last-child td { border-bottom: none; }
+
+    .tabla-vacia {
+      padding: var(--s7) var(--s4) !important;
+      text-align: center; color: var(--ink-4); font-size: 14px;
+    }
+
+    /* Fila cancelada: se apaga, no se pinta de gris entero — el importe y el
+       nombre tienen que seguir siendo legibles para poder auditarla. */
+    tr.row-cancelado td { color: var(--ink-5); }
+    tr.row-cancelado .link-cliente { color: var(--ink-4); text-decoration-color: var(--ink-5); }
+    tr.row-cancelado .col-total { color: var(--ink-4); text-decoration: line-through; }
+
+    .col-hora { line-height: 1.2; }
+    .col-hora .hora { display: block; font-size: 14.5px; font-weight: 600; color: var(--ink); }
+    .col-hora .fecha-sub { display: block; font-size: 11px; color: var(--ink-4); white-space: nowrap; }
+
+    .link-cliente {
+      background: none; border: none; padding: 0; margin: 0;
+      font: inherit; font-weight: 600; color: var(--azul);
+      text-align: left; cursor: pointer;
+      text-decoration: underline; text-underline-offset: 2px;
+      text-decoration-color: var(--azul-line);
+      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .link-cliente:hover { color: var(--violeta); text-decoration-color: var(--violeta); }
+
+    .badge-cancelado {
+      display: inline-block; margin-top: 2px;
+      padding: 1px 7px;
+      background: var(--rojo-bg); border: 1px solid var(--rojo-line); border-radius: 999px;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+      color: var(--rojo);
+    }
+
+    /* La nota se recorta a dos renglones: una nota larga no puede empujar la
+       altura de la fila y romper el barrido vertical de la lista. */
+    .col-nota { color: var(--ink-4); font-size: 13px; }
+    /* El recorte a dos renglones va en un span interno: aplicado sobre el <td>
+       reemplazaría su display:table-cell y descolocaría la celda entera. */
+    .nota-txt {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+      line-height: 1.35;
+    }
+
+    .col-total { text-align: right; font-weight: 600; color: var(--ink); white-space: nowrap; }
+
+    .col-vendedor { color: var(--ink-3); font-size: 13.5px; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---------------------------------------------------- chip medio pago -- */
+    .chip-pago {
+      display: inline-flex; align-items: center;
+      padding: 3px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-2);
+      font-size: 11.5px; font-weight: 600; letter-spacing: .01em;
+      color: var(--ink-3); white-space: nowrap;
+    }
+    .chip-pago--efectivo      { background: var(--verde-bg);   border-color: var(--verde-line);   color: var(--verde); }
+    .chip-pago--transferencia { background: var(--violeta-soft); border-color: var(--violeta-line); color: var(--violeta); }
+    .chip-pago--debito,
+    .chip-pago--credito       { background: var(--azul-bg);    border-color: var(--azul-line);    color: var(--azul); }
+    .chip-pago--parcial       { background: var(--ambar-bg);   border-color: var(--ambar-line);   color: var(--ambar); }
+
+    /* ----------------------------------------------- botones de la fila -- */
+    .acciones { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+
+    .icon-btn {
+      width: 36px; height: 36px; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0; margin: 0;
+      background: var(--surface);
+      color: var(--ink-3);
+      border: 1px solid var(--line);
+      border-radius: var(--r1);
+      cursor: pointer;
+    }
+    .icon-btn svg { width: 16px; height: 16px; display: block; }
+    .icon-btn:active:not(:disabled) { transform: scale(.94); }
+    /* Deshabilitado se neutraliza del todo: un color lavado se sigue leyendo
+       como acción disponible. */
+    .icon-btn:disabled {
+      background: var(--surface-2); border-color: var(--line-2);
+      color: var(--ink-5); cursor: not-allowed;
+    }
+
+    /* Cada acción tiene su color EN REPOSO: en una lista larga el ícono solo no
+       alcanza, el color es lo que se reconoce de un vistazo. El hover satura. */
+    .icon-btn--wa     { background: var(--wa-bg);        border-color: var(--wa-line);      color: var(--wa); }
+    .icon-btn--calc   { background: var(--violeta-soft); border-color: var(--violeta-line); color: var(--violeta); }
+    .icon-btn--ver    { background: var(--azul-bg);      border-color: var(--azul-line);    color: var(--azul); }
+    .icon-btn--print  { background: var(--line-3);       border-color: #e2e5ea;             color: var(--ink-2); }
+    .icon-btn--danger { background: var(--rojo-bg);      border-color: var(--rojo-line);    color: var(--rojo); }
+
+    .icon-btn--wa:hover:not(:disabled)     { background: #25D366;        border-color: #25D366;        color: #fff; }
+    .icon-btn--calc:hover:not(:disabled)   { background: var(--violeta); border-color: var(--violeta); color: #fff; }
+    .icon-btn--ver:hover:not(:disabled)    { background: var(--azul);    border-color: var(--azul);    color: #fff; }
+    .icon-btn--print:hover:not(:disabled)  { background: var(--ink-2);   border-color: var(--ink-2);   color: #fff; }
+    .icon-btn--danger:hover:not(:disabled) { background: var(--rojo);    border-color: var(--rojo);    color: #fff; }
+
+    /* -------------------------------------------------------- paginación -- */
+    .paginacion {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: var(--s3);
+    }
+    .paginacion:empty { display: none; }
+    .paginacion-info { font-size: 13px; color: var(--ink-4); }
+    .paginacion-nav { display: flex; align-items: center; gap: var(--s2); }
+    .paginacion-nav .secondary { min-height: var(--h-sm); padding: 0 var(--s3); }
+    .paginacion-pag { font-size: 13px; color: var(--ink-3); font-weight: 500; padding: 0 var(--s1); }
+
+    /* ------------------------------------------------------------ modales -- */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(16, 18, 22, .55);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+      z-index: 10000;
+      align-items: center; justify-content: center;
+      padding: var(--s4);
+    }
+    .modal-card {
+      background: var(--surface);
+      border-radius: 16px;
+      padding: var(--s7);
+      width: 100%; max-width: 380px;
+      box-shadow: var(--shadow-modal);
+      animation: fadeInUp var(--t-slow) ease forwards;
+    }
+    .modal-card-ancha { max-width: 420px; }
+
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--s3); margin-bottom: var(--s5);
+    }
+    .modal-titulo {
+      margin: 0;
+      font-size: 18px; font-weight: 700; letter-spacing: -.015em; color: var(--ink);
+      display: flex; align-items: center; gap: var(--s2);
+    }
+    .modal-cerrar {
+      background: none; border: none; padding: 0; margin: 0;
+      width: 28px; height: 28px; border-radius: var(--r1);
+      font-size: 22px; line-height: 1; color: var(--ink-4); cursor: pointer;
+    }
+    .modal-cerrar:hover { background: var(--line-3); color: var(--ink-2); }
+
+    .modal-campo { margin-bottom: var(--s4); }
+    .modal-label {
+      display: block;
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-4); margin-bottom: var(--s2);
+    }
+    .modal-input {
+      width: 100%;
+      height: var(--h-md);
+      padding: 0 var(--s3);
+      border: 1px solid var(--line);
+      border-radius: var(--r2);
+      background: var(--surface);
+      font-size: 15px; color: var(--ink);
+      transition: border-color var(--t-base), box-shadow var(--t-base);
+    }
+    .modal-input::placeholder { color: var(--ink-5); }
+    .modal-input:focus {
+      outline: none; border-color: var(--violeta);
+      box-shadow: 0 0 0 3px var(--violeta-soft);
+    }
+    .modal-input--alias { text-transform: uppercase; }
+
+    .modal-acciones { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s5); }
+
+    .btn-wa {
+      display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+      width: 100%; min-height: var(--h-lg);
+      background: #25D366; color: #fff;
+      border: none; border-radius: 12px;
+      font-size: 15.5px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 6px 18px -6px rgba(37, 211, 102, .5);
+    }
+    .btn-wa:hover:not(:disabled) { background: #1ebe5b; }
+    .btn-wa:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; }
+
+    .btn-guardar {
+      display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+      width: 100%; min-height: var(--h-md);
+      background: var(--surface); color: var(--ink-2);
+      border: 1px solid var(--line); border-radius: var(--r2);
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .btn-guardar:hover:not(:disabled) { background: var(--surface-2); border-color: #cdd1d8; color: var(--ink); }
+    .btn-guardar:disabled { opacity: .6; cursor: not-allowed; }
+
+    /* ------------------------------------------- calculadora de cobro --- */
+    /* Espejo exacto del modal de ingresoPedidoV2.css: el cajero ve la misma
+       pieza en las dos pantallas. */
+    .calc-destacado {
+      background: #f5f2fb;
+      border: 1px solid #e4dcf5;
+      border-radius: var(--r2);
+      padding: var(--s4);
+      margin-bottom: var(--s5);
+      text-align: center;
+    }
+    .calc-destacado-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-4); margin-bottom: var(--s1);
+    }
+    .calc-destacado-valor {
+      font-size: 32px; font-weight: 700; letter-spacing: -.025em; line-height: 1.1;
+      color: var(--violeta);
+    }
+    .calc-input {
+      width: 100%;
+      height: var(--h-lg);
+      padding: 0 var(--s4);
+      border: 1.5px solid var(--line);
+      border-radius: var(--r2);
+      background: var(--surface);
+      font-size: 20px; font-weight: 600; color: var(--ink);
+      outline: none;
+      transition: border-color var(--t-base), box-shadow var(--t-base);
+    }
+    .calc-input:focus { border-color: var(--violeta); box-shadow: 0 0 0 3px var(--violeta-soft); }
+
+    .calc-resultado {
+      display: none;
+      border-radius: var(--r2);
+      padding: var(--s4);
+      margin-top: var(--s4);
+      text-align: center;
+    }
+    .calc-resultado-vuelto { background: var(--verde-bg); border: 1px solid var(--verde-line); }
+    .calc-resultado-falta  { background: var(--rojo-bg);  border: 1px solid var(--rojo-line); }
+    .calc-resultado-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-4); margin-bottom: var(--s1);
+    }
+    .calc-resultado-valor {
+      font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1;
+    }
+    .calc-resultado-vuelto .calc-resultado-valor { color: var(--verde); }
+    .calc-resultado-falta  .calc-resultado-valor { color: var(--rojo); }
+
+    /* ---------------------------------------------------------- responsive -- */
+    /* Tablet apaisada y notebooks chicas: Nota se achica y los botones bajan un
+       punto de tamaño antes que aparezca el scroll horizontal. */
+    @media (max-width: 1200px) {
+      .tabla th:nth-child(1) { width: 90px; }
+      .tabla th:nth-child(3) { width: 15%; }
+      .tabla th:nth-child(4) { width: 118px; }
+      .tabla th:nth-child(5) { width: 124px; }
+      .tabla th:nth-child(6) { width: 104px; }
+      .tabla th:nth-child(7) { width: 198px; }
+      .tabla th, .tabla td { padding-left: var(--s3); padding-right: var(--s3); }
+      .icon-btn { width: 34px; height: 34px; }
+      .acciones { gap: 6px; }
+    }
+
+    @media (max-width: 1000px) {
+      .tabla th:nth-child(1) { width: 82px; }
+      .tabla th:nth-child(3) { width: 14%; }
+      .tabla th:nth-child(4) { width: 108px; }
+      .tabla th:nth-child(5) { width: 112px; }
+      .tabla th:nth-child(6) { width: 96px; }
+      .tabla th:nth-child(7) { width: 180px; }
+      .col-nota { font-size: 12.5px; }
+      .icon-btn { width: 32px; height: 32px; }
+      .icon-btn svg { width: 15px; height: 15px; }
+      .acciones { gap: 5px; }
+    }
+
+    @media (max-width: 900px) {
+      .pos-header { flex-wrap: wrap; gap: var(--s3); }
+      .pos-indicadores { padding-left: 0; border-left: none; }
+      main { padding: var(--s4) var(--s3) var(--s6); }
+      .card-tabla-scroll { max-height: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+      button:active:not(:disabled), a.secondary:active, .icon-btn:active:not(:disabled) { transform: none; }
     }
   </style>
 </head>
 <body>
-<header>
-  <h1>📦 Historial Reciente 📝</h1>
-</header>
-  <main>
-    <div style="margin-bottom: 16px; display: flex; gap: 20px; align-items: center;">
-      <input type="text" id="filtroNombre" placeholder="Filtrar por nombre" style="padding: 6px; border-radius: 4px; border: 1px solid #ccc;">
-      <button style="background:#39373f;" onclick="aplicarFiltros()">Filtrar</button>
-      <button style="background:#888;" onclick="limpiarFiltros()">Limpiar</button>
+  <header class="pos-header">
+    <div class="pos-brand">
+      <img src="logo.png" alt="HomePoint" class="pos-logo">
+      <div class="pos-titulo">
+        <span class="pos-titulo-label">Historial</span>
+        <span class="pos-titulo-valor">Pedidos del día</span>
+      </div>
+      <!-- Indicadores del día: se recalculan en cada render sobre el total
+           descargado (no sobre el filtro), así el pulso del día no cambia al
+           buscar un cliente. -->
+      <div class="pos-indicadores">
+        <div class="pos-ind">
+          <span class="pos-ind-label">Pedidos</span>
+          <span id="hdrPedidos" class="chip-hdr-valor">—</span>
+        </div>
+        <div class="pos-ind">
+          <span class="pos-ind-label">Facturado</span>
+          <span id="hdrFacturado" class="chip-hdr-valor">—</span>
+        </div>
+        <div id="hdrDesglose" class="hdr-desglose" aria-label="Facturación por medio de pago"></div>
+      </div>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Fecha</th>
-          <th>Nombre</th>
-          <th>Nota</th>
-          <th>Total</th>
-          <th>Pago</th>
-          <th>Vendedor</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      <tbody id="pedidosBody">
-        <tr><td colspan="7">Cargando...</td></tr>
-      </tbody>
-    </table>
-    <div id="paginacion" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:18px;"></div>
+
+    <nav class="pos-nav" aria-label="Secciones">
+      <a href="ingresoPedidoV2.html" class="secondary nav-destacado">Nuevo pedido</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <div class="toolbar-search">
+        <svg class="toolbar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+        </svg>
+        <label for="filtroNombre" class="sr-only">Filtrar por nombre</label>
+        <input type="text" id="filtroNombre" class="toolbar-input" placeholder="Filtrar por nombre del cliente" autocomplete="off">
+      </div>
+      <button type="button" class="primary" onclick="aplicarFiltros()">Filtrar</button>
+      <button type="button" class="secondary" onclick="limpiarFiltros()">Limpiar</button>
+    </div>
+
+    <section class="card-tabla" aria-label="Pedidos del día">
+      <div class="card-tabla-scroll">
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Cliente</th>
+              <th>Nota</th>
+              <th>Total</th>
+              <th>Pago</th>
+              <th>Vendedor</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="pedidosBody">
+            <tr><td colspan="7" class="tabla-vacia">Cargando pedidos…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div id="paginacion" class="paginacion"></div>
   </main>
 
   <!-- Modal WhatsApp Alias -->
-  <div id="waModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;">
-    <div style="background:#fff;border-radius:14px;padding:24px;width:100%;max-width:420px;box-shadow:0 12px 32px rgba(0,0,0,0.25);box-sizing:border-box;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid #eee;">
-        <h3 style="margin:0;font-size:1.15rem;color:#222;font-weight:700;">Contacto WhatsApp</h3>
-        <button onclick="cerrarModalWhatsapp()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#888;padding:0;line-height:1;margin:0;" title="Cerrar">&times;</button>
+  <div id="waModal" class="modal-overlay">
+    <div class="modal-card modal-card-ancha">
+      <div class="modal-head">
+        <h3 class="modal-titulo">
+          <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" fill="#25D366" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592z"/></svg>
+          Contacto WhatsApp
+        </h3>
+        <button type="button" class="modal-cerrar" onclick="cerrarModalWhatsapp()" title="Cerrar" aria-label="Cerrar">&times;</button>
       </div>
 
-      <div style="margin-bottom:14px;">
-        <label for="waTelefonoInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Teléfono</label>
-        <input type="tel" id="waTelefonoInput" placeholder="Ej: 11 2189-1006" style="width:100%;padding:10px 12px;border:2px solid #ccc;border-radius:6px;font-size:1rem;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#25D366'" onblur="this.style.borderColor='#ccc'">
+      <div class="modal-campo">
+        <label for="waTelefonoInput" class="modal-label">Teléfono</label>
+        <input type="tel" id="waTelefonoInput" class="modal-input" placeholder="Ej: 11 2189-1006">
       </div>
 
-      <div style="margin-bottom:20px;">
-        <label for="waAliasInput" style="font-weight:600;font-size:0.85rem;color:#555;display:block;margin-bottom:6px;">Alias</label>
-        <input type="text" id="waAliasInput" list="waAliasDatalist" placeholder="Ingrese o seleccione un alias" style="width:100%;padding:10px 12px;border:2px solid #ccc;border-radius:6px;font-size:1rem;text-transform:uppercase;box-sizing:border-box;transition:border-color 0.15s;" onfocus="this.style.borderColor='#25D366'" onblur="this.style.borderColor='#ccc'">
+      <div class="modal-campo">
+        <label for="waAliasInput" class="modal-label">Alias</label>
+        <input type="text" id="waAliasInput" class="modal-input modal-input--alias" list="waAliasDatalist" placeholder="Ingrese o seleccione un alias">
         <datalist id="waAliasDatalist"></datalist>
       </div>
 
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <button onclick="enviarWhatsapp()" style="width:100%;padding:12px;background:#25D366;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin:0;transition:background 0.15s;" onmouseover="this.style.background='#1ebe5b'" onmouseout="this.style.background='#25D366'">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="white" viewBox="0 0 16 16"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg>
+      <div class="modal-acciones">
+        <button type="button" class="btn-wa" onclick="enviarWhatsapp()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93A7.898 7.898 0 0 0 13.6 2.326zM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.251a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.957-6.584 6.591-6.584a6.56 6.56 0 0 1 4.66 1.931 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.961 6.592-6.592 6.592zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.116.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.116-.198-.012-.304.087-.403.089-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.325-.336-.445-.342-.116-.007-.248-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.47.205.84.326 1.129.418.475.152.904.13 1.246.08.38-.058 1.171-.48 1.338-.943.164-.464.164-.86.116-.943-.05-.084-.182-.133-.38-.232z"/></svg>
           Enviar WhatsApp
         </button>
-        <button id="waBtnGuardar" onclick="guardarDatosModal()" style="width:100%;padding:11px;background:#fff;color:#2a3d8f;border:2px solid #2a3d8f;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin:0;transition:all 0.15s;" onmouseover="this.style.background='#2a3d8f';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#2a3d8f'">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm0-1h9.5L16 4.5V14a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z"/><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h5A1.5 1.5 0 0 1 11 4.5v2A1.5 1.5 0 0 1 9.5 8h-5A1.5 1.5 0 0 1 3 6.5v-2zM4.5 4a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h5a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-5z"/></svg>
-          Guardar
+        <button type="button" id="waBtnGuardar" class="btn-guardar" onclick="guardarDatosModal()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4.5L11.5 1H2zm0-1h9.5L16 4.5V14a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z"/><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h5A1.5 1.5 0 0 1 11 4.5v2A1.5 1.5 0 0 1 9.5 8h-5A1.5 1.5 0 0 1 3 6.5v-2zM4.5 4a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h5a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5h-5z"/></svg>
+          Guardar datos
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Calculadora de Cobro -->
+  <div id="calcModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 class="modal-titulo">
+          <svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#6c4eb6" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 6h6"/>
+            <path d="M9 11h.01M12 11h.01M15 11h.01M9 15h.01M12 15h.01M15 15h.01M9 19h.01M12 19h.01M15 19h.01"/>
+          </svg>
+          Calculadora de Cobro
+        </h3>
+        <button type="button" class="modal-cerrar" onclick="cerrarCalcCobro()" title="Cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="calc-destacado">
+        <div class="calc-destacado-label">Total a cobrar</div>
+        <div id="calcTotal" class="calc-destacado-valor">$0</div>
+      </div>
+      <div>
+        <label for="calcAbona" class="modal-label">Abona el cliente</label>
+        <input type="text" id="calcAbona" class="calc-input" inputmode="numeric" placeholder="Ingrese monto...">
+      </div>
+      <div id="calcVueltoContainer" class="calc-resultado calc-resultado-vuelto">
+        <div class="calc-resultado-label">Vuelto</div>
+        <div id="calcVuelto" class="calc-resultado-valor">$0</div>
+      </div>
+      <div id="calcFaltaContainer" class="calc-resultado calc-resultado-falta">
+        <div class="calc-resultado-label">Falta</div>
+        <div id="calcFalta" class="calc-resultado-valor">$0</div>
       </div>
     </div>
   </div>
@@ -988,6 +1818,100 @@ swiTwxojtYcW2WoyuWXzJClYn1id6V+kpFuDiLDJjg6ngdeXvZ9BHRY8J/eWe1JE
     document.getElementById('waModal').addEventListener('click', function(e) {
       if (e.target === this) cerrarModalWhatsapp();
     });
+
+    // === CALCULADORA DE COBRO ===
+    // Misma mecánica que el modal de ingresoPedidoV2.html, pero el total no se
+    // lee de un input del formulario sino del pedido cacheado de la fila.
+    (function() {
+      const overlay = document.getElementById('calcModal');
+      const abonaInput = document.getElementById('calcAbona');
+      const vueltoContainer = document.getElementById('calcVueltoContainer');
+      const faltaContainer = document.getElementById('calcFaltaContainer');
+      const vueltoEl = document.getElementById('calcVuelto');
+      const faltaEl = document.getElementById('calcFalta');
+      const totalEl = document.getElementById('calcTotal');
+      let calcTotalFinal = 0;
+
+      // Dígitos tipeados en el input ($12.500 -> 12500)
+      function parseNumber(str) {
+        if (!str) return 0;
+        return parseInt(String(str).replace(/\D/g, ''), 10) || 0;
+      }
+
+      // totalFinal de Firebase puede venir como number o como string es-AR
+      function parseTotalPedido(val) {
+        if (val === null || val === undefined || val === '') return 0;
+        if (typeof val === 'number') return Math.round(val);
+        const clean = String(val).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+        const n = parseFloat(clean);
+        return isNaN(n) ? 0 : Math.round(n);
+      }
+
+      function formatNumber(n) {
+        return '$' + Math.round(n).toLocaleString('es-AR').replace(/,/g, '.');
+      }
+
+      function formatInputMiles(input) {
+        const num = parseNumber(input.value);
+        if (num > 0) {
+          const pos = input.selectionStart;
+          const lenAntes = input.value.length;
+          input.value = '$' + num.toLocaleString('es-AR').replace(/,/g, '.');
+          const lenDespues = input.value.length;
+          input.setSelectionRange(pos + (lenDespues - lenAntes), pos + (lenDespues - lenAntes));
+        } else {
+          input.value = '';
+        }
+      }
+
+      function abrirCalcCobro(id) {
+        const pedido = pedidosCache[id];
+        if (!pedido) { alert('Pedido no encontrado'); return; }
+        calcTotalFinal = parseTotalPedido((pedido.pagos || {}).totalFinal);
+        totalEl.textContent = formatNumber(calcTotalFinal);
+        abonaInput.value = '';
+        vueltoContainer.style.display = 'none';
+        faltaContainer.style.display = 'none';
+        overlay.style.display = 'flex';
+        setTimeout(() => abonaInput.focus(), 100);
+      }
+
+      function cerrarCalcCobro() {
+        overlay.style.display = 'none';
+      }
+
+      function calcularVuelto() {
+        formatInputMiles(abonaInput);
+        const abona = parseNumber(abonaInput.value);
+        if (!abona) {
+          vueltoContainer.style.display = 'none';
+          faltaContainer.style.display = 'none';
+          return;
+        }
+        const diff = abona - calcTotalFinal;
+        if (diff >= 0) {
+          vueltoEl.textContent = formatNumber(diff);
+          vueltoContainer.style.display = 'block';
+          faltaContainer.style.display = 'none';
+        } else {
+          faltaEl.textContent = formatNumber(Math.abs(diff));
+          faltaContainer.style.display = 'block';
+          vueltoContainer.style.display = 'none';
+        }
+      }
+
+      overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) cerrarCalcCobro();
+      });
+      abonaInput.addEventListener('input', calcularVuelto);
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && overlay.style.display === 'flex') cerrarCalcCobro();
+      });
+
+      // Las filas de la tabla se generan con onclick inline: hace falta el global
+      window.abrirCalcCobro = abrirCalcCobro;
+      window.cerrarCalcCobro = cerrarCalcCobro;
+    })();
   </script>
 </body>
 </html>

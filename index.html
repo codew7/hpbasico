@@ -2,6 +2,11 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
+    <!-- Fuera de los buscadores: noindex impide que Google indexe la pagina y
+         nofollow que siga sus enlaces. Debe quedar rastreable en robots.txt,
+         porque si se bloquea el crawleo Google nunca lee esta etiqueta. -->
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="googlebot" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Control</title>
     <link rel="icon" href="faviconnegro.png" type="image/png">
@@ -621,13 +626,6 @@
             }
         }
 
-        /* Estilos para botones de logout */
-        #logoutBtn:hover,
-        #logoutBtnUser:hover {
-            background: rgba(255,255,255,0.4) !important;
-            transform: translateY(-1px);
-        }
-
         /* Estilos para indicadores relativos al header */
         .header {
             position: relative;
@@ -741,7 +739,7 @@
             text-align: left;
         }
 
-        /* Estilos para la sección de estado de usuario */
+        /* Barra de sesión */
         .user-status-section {
             width: 100%;
             max-width: 600px;
@@ -750,17 +748,111 @@
             align-items: center;
         }
 
-        #adminIndicator,
-        #userIndicator {
-            animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-            animation-delay: 0.6s;
+        .session-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.875rem;
+            max-width: 100%;
+            background: var(--white);
+            border: 1px solid var(--gray-200);
+            border-radius: 999px;
+            padding: 0.5rem 0.5rem 0.5rem 0.5rem;
+            box-shadow: var(--shadow-md);
+            animation: fadeInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
             opacity: 0;
             transform: translateY(20px);
         }
 
-        #adminIndicator.show,
-        #userIndicator.show {
-            display: block !important;
+        .session-avatar {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: var(--white);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .session-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            min-width: 0;
+            line-height: 1.25;
+        }
+
+        .session-name {
+            max-width: 220px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--gray-800);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .session-role {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            color: var(--gray-600);
+        }
+
+        .session-role.admin {
+            color: var(--primary);
+        }
+
+        .session-logout {
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--gray-100);
+            border: 1px solid var(--gray-200);
+            border-radius: 50%;
+            font-size: 1rem;
+            color: var(--gray-600);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .session-logout:hover {
+            background: #fef2f2;
+            border-color: #fecaca;
+            color: #dc2626;
+            transform: translateY(-1px);
+        }
+
+        .session-logout:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+
+        @media (max-width: 480px) {
+            .session-name {
+                max-width: 150px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .session-bar {
+                animation: none;
+                opacity: 1;
+                transform: none;
+            }
+
+            .session-logout {
+                transition: none;
+            }
         }
     </style>
 </head>
@@ -794,6 +886,19 @@
         function mostrarLogin() {
             document.getElementById('loginOverlay').style.display = 'flex';
             document.getElementById('mainContainer').style.display = 'none';
+
+            // Dejar la barra de sesión y el formulario listos para un nuevo ingreso
+            const sessionBar = document.getElementById('sessionBar');
+            if (sessionBar) sessionBar.style.display = 'none';
+
+            const btn = document.getElementById('loginSubmitBtn');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Iniciar Sesión';
+            }
+            const passwordField = document.getElementById('loginPassword');
+            if (passwordField) passwordField.value = '';
+
             setTimeout(() => {
                 const emailInput = document.getElementById('loginEmail');
                 if (emailInput) emailInput.focus();
@@ -845,6 +950,51 @@
             errorDiv.style.display = 'block';
         }
 
+        // Nombre visible: displayName de Firebase o, si no hay, el usuario del correo
+        function nombreDeUsuario(user) {
+            if (user.displayName && user.displayName.trim()) {
+                return user.displayName.trim();
+            }
+            const local = (user.email || '').split('@')[0];
+            const nombre = local
+                .split(/[._\-+]+/)
+                .filter(Boolean)
+                .map(parte => parte.charAt(0).toUpperCase() + parte.slice(1))
+                .join(' ');
+            return nombre || 'Usuario';
+        }
+
+        function inicialesDeUsuario(nombre) {
+            const partes = nombre.split(' ').filter(Boolean);
+            const iniciales = (partes[0] || '').charAt(0) + (partes[1] || '').charAt(0);
+            return iniciales.toUpperCase() || 'U';
+        }
+
+        // Renderizar la barra de sesión (visible para cualquier usuario autenticado)
+        function mostrarSesion(user) {
+            const bar = document.getElementById('sessionBar');
+            // onAuthStateChanged puede resolverse antes de que exista el markup
+            if (!bar) {
+                document.addEventListener('DOMContentLoaded', () => mostrarSesion(user), { once: true });
+                return;
+            }
+
+            const nombre = nombreDeUsuario(user);
+            document.getElementById('sessionAvatar').textContent = inicialesDeUsuario(nombre);
+
+            const nameEl = document.getElementById('sessionName');
+            nameEl.textContent = nombre;
+            nameEl.title = user.email || '';
+
+            const roleEl = document.getElementById('sessionRole');
+            roleEl.innerHTML = admin
+                ? '<i class="bi bi-shield-check"></i> Modo Administrador'
+                : '<i class="bi bi-person"></i> Usuario';
+            roleEl.classList.toggle('admin', admin);
+
+            bar.style.display = 'flex';
+        }
+
         // Timeout de seguridad: mostrar login después de 5 segundos si no se resolvió auth
         setTimeout(() => {
             if (!authResolved) {
@@ -860,35 +1010,8 @@
             if (user) {
                 console.log('Usuario autenticado:', user.email);
 
-                // Verificar si es administrador
-                if (adminEmails.includes(user.email)) {
-                    admin = true;
-                    const adminIndicator = document.getElementById('adminIndicator');
-                    const userIndicator = document.getElementById('userIndicator');
-                    if (adminIndicator) {
-                        adminIndicator.style.display = 'block';
-                        adminIndicator.classList.add('show');
-                    }
-                    if (userIndicator) {
-                        userIndicator.style.display = 'none';
-                        userIndicator.classList.remove('show');
-                    }
-                } else {
-                    admin = false;
-                    const adminIndicator = document.getElementById('adminIndicator');
-                    const userIndicator = document.getElementById('userIndicator');
-                    const userEmail = document.getElementById('userEmail');
-                    if (adminIndicator) {
-                        adminIndicator.style.display = 'none';
-                        adminIndicator.classList.remove('show');
-                    }
-                    if (userIndicator) {
-                        userIndicator.style.display = 'block';
-                        userIndicator.classList.add('show');
-                    }
-                    if (userEmail) userEmail.textContent = user.email;
-                }
-
+                admin = adminEmails.includes(user.email);
+                mostrarSesion(user);
                 mostrarPanel();
                 inicializarPagina();
             } else {
@@ -942,7 +1065,7 @@
         <!-- Navigation Grid -->
         <nav class="nav-grid">
             <!-- Fila 1 -->
-            <a href="ingresoPedido.html" class="nav-card primary" tabindex="0" target="_blank">
+            <a href="ingresoPedidoV2.html" class="nav-card primary" tabindex="0" target="_blank">
                 <span class="nav-card-icon">📝</span>
                 <h2 class="nav-card-title">Ingreso de Pedido</h2>
                 <p class="nav-card-description">Crear nueva orden de pedido</p>
@@ -960,7 +1083,7 @@
                 <p class="nav-card-description">Visualización y control de stock</p>
             </a>
 
-            <a href="https://home-point.com.ar/catalogo.html" class="nav-card blue" tabindex="0" target="_blank">
+            <a href="catalogo.html" class="nav-card blue" tabindex="0" target="_blank">
                 <span class="nav-card-icon">🛒</span>
                 <h2 class="nav-card-title">Catálogo Online</h2>
                 <p class="nav-card-description">Consulta artículos y precios</p>
@@ -992,11 +1115,15 @@
             </a>
         </nav>
 
-        <!-- Indicadores de usuario -->
+        <!-- Barra de sesión -->
         <div class="user-status-section">
-            <div id="adminIndicator" style="background: linear-gradient(135deg, #6c4eb6, #8b6bc7); padding: 10px 18px; border-radius: 25px; font-size: 0.9rem; display: none; color: white; box-shadow: 0 8px 20px rgba(108, 78, 182, 0.3); margin-top: 1rem; text-align: center;">
-                <i class="bi bi-shield-check"></i> Modo Administrador
-                <button id="logoutBtn" style="margin-left: 15px; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 6px 12px; font-size: 0.8rem; color: white; cursor: pointer; transition: all 0.3s ease;" title="Cerrar sesión">
+            <div id="sessionBar" class="session-bar" style="display: none;">
+                <span id="sessionAvatar" class="session-avatar" aria-hidden="true"></span>
+                <span class="session-info">
+                    <span id="sessionName" class="session-name"></span>
+                    <span id="sessionRole" class="session-role"></span>
+                </span>
+                <button id="logoutBtn" class="session-logout" type="button" title="Cerrar sesión" aria-label="Cerrar sesión">
                     <i class="bi bi-box-arrow-right"></i>
                 </button>
             </div>
@@ -1382,17 +1509,12 @@
             const adminModal = document.getElementById('adminModal');
             const enviosModal = document.getElementById('enviosModal');
             
-            // Event listeners para los botones de logout
+            // Event listener del botón de cerrar sesión
             const logoutBtn = document.getElementById('logoutBtn');
-            const logoutBtnUser = document.getElementById('logoutBtnUser');
-            
             if (logoutBtn) {
                 logoutBtn.addEventListener('click', cerrarSesion);
             }
-            if (logoutBtnUser) {
-                logoutBtnUser.addEventListener('click', cerrarSesion);
-            }
-            
+
             // Cerrar modal de autenticación al hacer clic fuera
             modal.addEventListener('click', function(e) {
                 if (e.target === modal) {
